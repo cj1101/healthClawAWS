@@ -60,6 +60,7 @@ def test_whoop_oauth_authorize_then_callback(monkeypatch, iso_test_settings):
         st = fetch_connector_state(cur, "whoop")
 
     oauth_state = (st.get("oauth_pending") or {}).get("state")
+    assert isinstance(oauth_state, str) and len(oauth_state) == 8
 
     cb = c1.get(
         "/v1/connectors/whoop/callback",
@@ -109,6 +110,9 @@ class _FakeWhoopClient:
     def get_body_measurement(self):  # noqa: ANN202
         return {"height_meter": 1.82, "weight_kilogram": 80}
 
+    def get_profile_basic(self):  # noqa: ANN202
+        return {"user_id": 9001, "email": "athlete@example.com", "first_name": "T", "last_name": "Est"}
+
 
 def test_whoop_sync_mocked(monkeypatch, iso_test_settings):
     cfg = iso_test_settings.model_copy(
@@ -135,6 +139,13 @@ def test_whoop_sync_mocked(monkeypatch, iso_test_settings):
     assert r1["ok"] is True
     ingested_workouts = int(r1["totals"]["workout"]["ingested"])
     assert ingested_workouts >= 1
+    assert int(r1["totals"]["profile"].get("ingested") or 0) >= 1
+
+    with db.transaction() as cur:
+        row = cur.execute("SELECT id, payload_json FROM whoop_workout WHERE id = ?", ("w-1",)).fetchone()
+        assert row is not None
+        row_p = cur.execute("SELECT user_id FROM whoop_profile WHERE user_id = ?", (9001,)).fetchone()
+        assert row_p is not None
 
     r2 = ws.sync_whoop(db, cfg, days=7)
     assert int(r2["totals"]["workout"]["skipped_duplicate"]) >= ingested_workouts
@@ -184,6 +195,9 @@ class _BoomWhoopClient:
 
     def get_body_measurement(self):  # noqa: ANN202
         return None
+
+    def get_profile_basic(self):  # noqa: ANN202
+        return {}
 
 
 def test_whoop_sync_failure_records_last_error(monkeypatch, iso_test_settings):
