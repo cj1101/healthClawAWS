@@ -14,7 +14,10 @@ def test_whoop_status_disconnected_default(iso_test_settings):
     client = TestClient(create_app(iso_test_settings))
     r = client.get("/v1/connectors/whoop/status")
     assert r.status_code == 200
-    assert r.json()["connected"] is False
+    body = r.json()
+    assert body["connected"] is False
+    assert "last_sync_attempt_at" in body
+    assert "last_error" in body
 
 
 def test_whoop_authorize_requires_config(iso_test_settings):
@@ -161,3 +164,75 @@ def test_http_whoop_sync_route(monkeypatch, iso_test_settings):
     resp = client.post("/v1/connectors/whoop/sync")
     assert resp.status_code == 200
     assert resp.json()["totals"]["workout"]["fetched"] >= 1
+
+
+class _BoomWhoopClient:
+    def __init__(self, *_a, **_k) -> None:  # noqa: ANN401
+        pass
+
+    def get_workouts(self, **_k):  # noqa: ANN003
+        raise RuntimeError("whoop api down")
+
+    def get_sleep(self, **_k):  # noqa: ANN003
+        return []
+
+    def get_recovery(self, **_k):  # noqa: ANN003
+        return []
+
+    def get_cycles(self, **_k):  # noqa: ANN003
+        return []
+
+    def get_body_measurement(self):  # noqa: ANN202
+        return None
+
+
+def test_whoop_sync_failure_records_last_error(monkeypatch, iso_test_settings):
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "c",
+            "whoop_client_secret": "s",
+            "whoop_redirect_uri": "http://localhost/cb",
+        },
+    )
+    db = get_db(cfg)
+    with db.transaction() as cur:
+        put_connector_state(
+            cur,
+            "whoop",
+            {"oauth": {"access_token": "t", "refresh_token": "r", "expires_at": 9999999999}},
+        )
+    monkeypatch.setattr(ws, "WhoopAPIClient", _BoomWhoopClient)
+    try:
+        ws.sync_whoop(db, cfg, days=2)
+    except RuntimeError:
+        pass
+    with db.transaction() as cur:
+        st = fetch_connector_state(cur, "whoop")
+    sync = st.get("sync") or {}
+    assert sync.get("last_sync_ok") is False
+    assert "whoop api down" in (sync.get("last_error") or "")
+
+
+def test_http_job_whoop_sync_matches_sync(monkeypatch, iso_test_settings):
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "c",
+            "whoop_client_secret": "s",
+            "whoop_redirect_uri": "http://localhost/cb",
+        },
+    )
+    monkeypatch.setattr(ws, "WhoopAPIClient", _FakeWhoopClient)
+    db = get_db(cfg)
+    with db.transaction() as cur:
+        put_connector_state(
+            cur,
+            "whoop",
+            {"oauth": {"access_token": "tok", "refresh_token": "r", "expires_at": 9999999999}},
+        )
+    app = create_app(cfg)
+    c = TestClient(app)
+    r_job = c.post("/v1/jobs/whoop-sync")
+    r_direct = c.post("/v1/connectors/whoop/sync")
+    assert r_job.status_code == 200
+    assert r_direct.status_code == 200
+    assert r_job.json()["totals"]["workout"]["fetched"] == r_direct.json()["totals"]["workout"]["fetched"]

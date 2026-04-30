@@ -84,3 +84,51 @@ def test_unknown_record_type_skipped(iso_test_settings, tmp_path):
     assert r["records_seen"] == 1
     assert r["records_ingested"] == 0
     assert r["records_skipped_type"] == 1
+
+
+_MIXED_EXPORT_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="US">
+  <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN"
+          sourceName="Watch"
+          unit="ms"
+          value="48"
+          startDate="2025-06-06 08:00:00 +0000"
+          endDate="2025-06-06 08:01:00 +0000"/>
+  <Workout workoutActivityType="HKWorkoutActivityTypeRunning"
+          duration="1200.5"
+          sourceName="Watch"
+          creationDate="2025-06-06 07:00:00 +0000"
+          startDate="2025-06-06 07:00:00 +0000"
+          endDate="2025-06-06 07:20:00 +0000"
+          totalDistance="5000"
+          totalEnergyBurned="350"/>
+</HealthData>
+"""
+
+
+def test_apple_health_hrv_and_workout(iso_test_settings, tmp_path):
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr("apple_health_export/export.xml", _MIXED_EXPORT_XML)
+    bio.seek(0)
+    p = tmp_path / "mix.zip"
+    p.write_bytes(bio.read())
+    db = get_db(iso_test_settings)
+    r = ingest_apple_health_export_from_zip(db, p)
+    assert r["ok"] is True
+    assert r["records_seen"] == 2
+    assert r["records_ingested"] == 2
+    with db.transaction() as cur:
+        qrows = cur.execute(
+            "SELECT event_type, domain_slug FROM raw_events WHERE source = ? ORDER BY event_type",
+            ("healthkit_export",),
+        ).fetchall()
+        types = [qrows[i][0] for i in range(len(qrows))]
+        d = cur.execute(
+            "SELECT payload_json FROM raw_events WHERE event_type = ?",
+            ("healthkit_workout",),
+        ).fetchone()
+    assert "healthkit_quantity" in types
+    assert "healthkit_workout" in types
+    assert d is not None
+    assert "hk_workout_running" in str(d[0])

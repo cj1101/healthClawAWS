@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from nemoclaw_health.auth_http import install_dashboard_auth
 from nemoclaw_health.connectors.apple_health import (
     apple_health_connector_status,
     ingest_apple_health_export_from_zip,
@@ -23,7 +27,13 @@ from nemoclaw_health.connectors.whoop_oauth import (
 )
 from nemoclaw_health.connectors.whoop_sync import sync_whoop
 from nemoclaw_health.data_entry import DataEntryService
-from nemoclaw_health.db import fetch_connector_state, get_db
+from nemoclaw_health.debug_service import (
+    analyze_environment,
+    analyze_task_trace,
+    recent_sessions,
+    session_trace,
+)
+from nemoclaw_health.db import fetch_connector_state, fetch_profile, get_db, new_id
 from nemoclaw_health.events import (
     EventValidationError,
     UserVisibilityInvariantError,
@@ -83,6 +93,19 @@ class SchemaHintsPatchReq(BaseModel):
     schema_hint: list[str] = Field(default_factory=list)
 
 
+class LoginReq(BaseModel):
+    password: str = Field(..., min_length=1)
+
+
+class GoalCreate(BaseModel):
+    title: str = Field(..., min_length=1)
+    body_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class DebugAnalyzeBody(BaseModel):
+    task_id: str | None = None
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
 
@@ -105,6 +128,151 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db = get_db(s)
         db.init_schema()
         return {"ok": True}
+
+    @app.post("/v1/auth/login")
+    async def auth_login(
+        request: Request,
+        req: LoginReq = Body(...),
+        s: Settings = Depends(svc_settings),
+    ):
+        if not s.dashboard_password:
+            request.session["authenticated"] = True
+            return {"ok": True, "auth": "disabled"}
+        if req.password != s.dashboard_password:
+            raise HTTPException(status_code=401, detail="Invalid password")
+        request.session["authenticated"] = True
+        return {"ok": True}
+
+    @app.post("/v1/auth/logout")
+    async def auth_logout(request: Request, s: Settings = Depends(svc_settings)):
+        if s.dashboard_password:
+            request.session.clear()
+        return {"ok": True}
+
+    @app.get("/v1/profile")
+    def profile_get(s: Settings = Depends(svc_settings)):
+        db = get_db(s)
+        with db.transaction() as cur:
+            body = fetch_profile(cur)
+        return {"profile": body}
+
+    @app.put("/v1/profile")
+    def profile_put(body: dict[str, Any] = Body(...), s: Settings = Depends(svc_settings)):
+        db = get_db(s)
+        with db.transaction() as cur:
+            fetch_profile(cur)
+            cur.execute(
+                """
+                UPDATE user_profile
+                SET body_json = ?, updated_at = datetime('now')
+                WHERE id = 1
+                """,
+                (json.dumps(body, ensure_ascii=False),),
+            )
+        return {"ok": True}
+
+    @app.get("/v1/goals")
+    def goals_list(s: Settings = Depends(svc_settings)):
+        db = get_db(s)
+        with db.transaction() as cur:
+            rows = cur.execute(
+                """
+                SELECT id, title, body_json, created_at
+                FROM goals
+                WHERE deleted_at IS NULL
+                ORDER BY created_at DESC
+                """,
+            ).fetchall()
+        goals: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            if "body_json" in d and isinstance(d["body_json"], str):
+                try:
+                    d["body"] = json.loads(d["body_json"])
+                except json.JSONDecodeError:
+                    d["body"] = {}
+                del d["body_json"]
+            goals.append(d)
+        return {"goals": goals}
+
+    @app.post("/v1/goals")
+    def goals_create(req: GoalCreate = Body(...), s: Settings = Depends(svc_settings)):
+        db = get_db(s)
+        gid = new_id("g_")
+        with db.transaction() as cur:
+            cur.execute(
+                """
+                INSERT INTO goals (id, title, body_json)
+                VALUES (?, ?, ?)
+                """,
+                (gid, req.title, json.dumps(req.body_json, ensure_ascii=False)),
+            )
+        return {"ok": True, "id": gid}
+
+    @app.get("/v1/timeline")
+    def timeline(
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        source: Annotated[str | None, Query()] = None,
+        s: Settings = Depends(svc_settings),
+    ):
+        db = get_db(s)
+        with db.transaction() as cur:
+            if source:
+                rows = cur.execute(
+                    """
+                    SELECT id, occurred_at, source, event_type, domain_slug, payload_json, confidence
+                    FROM raw_events
+                    WHERE source = ?
+                    ORDER BY occurred_at DESC
+                    LIMIT ?
+                    """,
+                    (source, limit),
+                ).fetchall()
+            else:
+                rows = cur.execute(
+                    """
+                    SELECT id, occurred_at, source, event_type, domain_slug, payload_json, confidence
+                    FROM raw_events
+                    ORDER BY occurred_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            pj = d.pop("payload_json", None)
+            if isinstance(pj, str):
+                try:
+                    d["payload"] = json.loads(pj)
+                except json.JSONDecodeError:
+                    d["payload"] = {}
+            else:
+                d["payload"] = {}
+            items.append(d)
+        return {"items": items, "limit": limit, "source": source}
+
+    @app.get("/v1/debug/sessions")
+    def debug_sessions_list(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        s: Settings = Depends(svc_settings),
+    ):
+        return {"sessions": recent_sessions(get_db(s), limit=limit)}
+
+    @app.get("/v1/debug/session/{task_id}")
+    def debug_session_detail(task_id: str, s: Settings = Depends(svc_settings)):
+        return session_trace(get_db(s), task_id)
+
+    @app.post("/v1/debug/analyze")
+    def debug_analyze(
+        body: DebugAnalyzeBody | None = Body(default=None),
+        s: Settings = Depends(svc_settings),
+    ):
+        db = get_db(s)
+        b = body or DebugAnalyzeBody()
+        if b.task_id:
+            return analyze_task_trace(db, s, b.task_id.strip())
+        return {"task_id": None, "findings": analyze_environment(db, s)}
 
     @app.post("/v1/chat")
     def chat(req: ChatReq = Body(...), s: Settings = Depends(svc_settings)):
@@ -173,6 +341,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             s.delegation_metadata_retention_days,
             dry_run=req.dry_run,
         )
+
+    @app.post("/v1/jobs/whoop-sync")
+    def job_whoop_sync(
+        s: Settings = Depends(svc_settings),
+        days: Annotated[int | None, Query()] = None,
+    ):
+        """Cron-friendly alias for POST /v1/connectors/whoop/sync."""
+        db = get_db(s)
+        try:
+            return sync_whoop(db, s, days=days)
+        except WhoopConfigError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        except WhoopOAuthError as e:
+            raise HTTPException(status_code=401, detail=str(e)) from e
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     @app.post("/v1/storage/export-raw-jsonl")
     def export_raw_jsonl(req: ExportRawReq = Body(...), s: Settings = Depends(svc_settings)):
@@ -258,6 +444,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=401, detail=str(e)) from e
         except RuntimeError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     @app.get("/v1/connectors/apple-health/status")
     def apple_status(s: Settings = Depends(svc_settings)):
@@ -286,6 +474,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pass
         return result
 
+    static_dash = Path(__file__).resolve().parent / "static" / "dashboard"
+    assets_dir = static_dash / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="dash_assets")
+
+    @app.get("/", include_in_schema=False)
+    def dash_index():
+        index = static_dash / "index.html"
+        if not index.is_file():
+            return {"service": "nemoclaw-health", "hint": "Install static/dashboard files or use /docs"}
+        return FileResponse(index)
+
+    install_dashboard_auth(app, settings)
     return app
 
 

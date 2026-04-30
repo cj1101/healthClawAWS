@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     whoop_http_max_retries: int = 4
     whoop_default_sync_days: int = 7
 
+    dashboard_password: str | None = None
+    session_secret: str | None = None
+
     def resolved_sqlite(self) -> Path:
         return self.sqlite_path if self.sqlite_path is not None else self.data_dir / "nemoclaw.sqlite"
 

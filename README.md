@@ -35,10 +35,13 @@ cd runtime
 PYTHONPATH=. uvicorn nemoclaw_health.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
+Open `http://localhost:8000/` for the dashboard (static UI). Set `NEMOWLAW_DASHBOARD_PASSWORD` to require sign-in for all `/v1/*` routes except `GET /healthz`, `POST /v1/auth/login`, and `GET /v1/connectors/whoop/callback`. Optional `NEMOWLAW_SESSION_SECRET` overrides the derived session signing key.
+
 | Area | Highlights |
 |------|------------|
 | Phase 1 | `/v1/chat`, data-entry, SQLite retention, contract validation |
-| Phase 2 | WHOOP OAuth + sync (`/v1/connectors/whoop/*`), Apple Health export ZIP import (`/v1/connectors/apple-health/*`) |
+| Phase 2 | WHOOP OAuth + sync (`/v1/connectors/whoop/*`), Apple Health export ZIP import (`/v1/connectors/apple-health/*`), cron alias `POST /v1/jobs/whoop-sync` |
+| Phase 3 | Session auth (`NEMOWLAW_DASHBOARD_PASSWORD`), localhost dashboard at `/`, `/v1/profile`, `/v1/goals`, `/v1/timeline`, `/v1/debug/*` |
 
 ### Storage & retention
 

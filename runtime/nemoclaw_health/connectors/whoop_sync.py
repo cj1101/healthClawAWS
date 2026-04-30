@@ -95,6 +95,46 @@ def _body_measurement_dedupe_key(snapshot: dict[str, Any]) -> str:
     return f"whoop_body_measurement:{h}"
 
 
+def _mark_whoop_sync_attempt(db: Database) -> None:
+    at = utc_now_iso()
+    with db.transaction() as cur:
+        st = fetch_connector_state(cur, "whoop")
+        st.setdefault("sync", {})
+        st["sync"]["last_attempt_at"] = at
+        put_connector_state(cur, "whoop", st)
+
+
+def _mark_whoop_sync_success(
+    db: Database,
+    *,
+    start_iso: str,
+    end_iso: str,
+    totals: dict[str, Any],
+) -> None:
+    with db.transaction() as cur:
+        st = fetch_connector_state(cur, "whoop")
+        st.setdefault("sync", {})
+        st["sync"]["last_success_at"] = utc_now_iso()
+        st["sync"]["last_window_start"] = start_iso
+        st["sync"]["last_window_end"] = end_iso
+        st["sync"]["last_sync_ok"] = True
+        st["sync"]["last_error"] = None
+        st["sync"]["last_totals"] = totals
+        put_connector_state(cur, "whoop", st)
+
+
+def _mark_whoop_sync_failure(db: Database, message: str) -> None:
+    msg = (message or "sync_failed").strip()
+    if len(msg) > 800:
+        msg = msg[:797] + "..."
+    with db.transaction() as cur:
+        st = fetch_connector_state(cur, "whoop")
+        st.setdefault("sync", {})
+        st["sync"]["last_sync_ok"] = False
+        st["sync"]["last_error"] = msg
+        put_connector_state(cur, "whoop", st)
+
+
 def sync_whoop(
     db: Database,
     settings: Settings,
@@ -108,12 +148,23 @@ def sync_whoop(
     window_days = days if days is not None else settings.whoop_default_sync_days
     start_iso, end_iso = default_window_iso(window_days)
 
-    whoop_oauth.ensure_whoop_access_token(db, settings)
+    _mark_whoop_sync_attempt(db)
+
+    try:
+        whoop_oauth.ensure_whoop_access_token(db, settings)
+    except Exception as e:
+        _mark_whoop_sync_failure(db, str(e))
+        raise
 
     def _token_provider() -> str:
         return whoop_oauth.ensure_whoop_access_token(db, settings)
 
-    client = WhoopAPIClient(settings, _token_provider)
+    try:
+        client = WhoopAPIClient(settings, _token_provider)
+    except Exception as e:
+        _mark_whoop_sync_failure(db, str(e))
+        raise
+
     totals: dict[str, Any] = {
         row["key"]: {"fetched": 0, "ingested": 0, "skipped_duplicate": 0, "skipped_no_id": 0}
         for row in WHOOP_ROWS
@@ -123,77 +174,74 @@ def sync_whoop(
     fallback_at = utc_now_iso()
     connector = "whoop"
 
-    for meta in WHOOP_ROWS:
-        fetch = getattr(client, meta["fetch_attr"])
-        records = fetch(start=start_iso, end=end_iso)
-        totals[meta["key"]]["fetched"] = len(records)
+    try:
+        for meta in WHOOP_ROWS:
+            fetch = getattr(client, meta["fetch_attr"])
+            records = fetch(start=start_iso, end=end_iso)
+            totals[meta["key"]]["fetched"] = len(records)
 
-        for record in records:
-            if not isinstance(record, dict):
-                continue
-            sid_key = whoop_stable_id(meta["key"], record)
-            if not sid_key:
-                totals[meta["key"]]["skipped_no_id"] += 1
-                continue
-
-            with db.transaction() as cur_chk:
-                if idempotency_seen(cur_chk, connector, sid_key):
-                    totals[meta["key"]]["skipped_duplicate"] += 1
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                sid_key = whoop_stable_id(meta["key"], record)
+                if not sid_key:
+                    totals[meta["key"]]["skipped_no_id"] += 1
                     continue
 
-            occurred = normalize_whoop_occurred(
-                ("start", "cycle_start_time", "sleep_start_time", "created_at", "end"),
-                record,
-            )
-            at_iso = occurred or fallback_at
+                with db.transaction() as cur_chk:
+                    if idempotency_seen(cur_chk, connector, sid_key):
+                        totals[meta["key"]]["skipped_duplicate"] += 1
+                        continue
 
-            payload = dict(record)
-            rid = payload.get("id")
-            payload.setdefault("whoop_id", rid)
-            provenance = {"connector": "whoop", "whoop_stable_id": sid_key}
-            out = svc.ingest(
-                domain=meta["domain"],
-                payload=payload,
-                source="whoop",
-                provenance=provenance,
-                occurred_at=at_iso,
-                committed_raw_event_type=meta["event_type"],
-            )
-            if out.get("status") == "committed" and isinstance(out.get("raw_event_id"), str):
-                raw_id_val = str(out["raw_event_id"])
-                totals[meta["key"]]["ingested"] += 1
-                with db.transaction() as cur2:
-                    record_idempotency(cur2, connector, sid_key, raw_id_val)
-
-    bm = client.get_body_measurement()
-    totals["body_measurement"]["fetched"] = int(bool(bm))
-    if bm:
-        bm_key = _body_measurement_dedupe_key(bm)
-        with db.transaction() as cur_bm:
-            if idempotency_seen(cur_bm, connector, bm_key):
-                totals["body_measurement"]["skipped_duplicate"] += 1
-            else:
-                measured_at = normalize_whoop_occurred(("measurement_timestamp",), bm) or fallback_at
-                out_bm = svc.ingest(
-                    domain="whoop_body_measurement",
-                    payload={"snapshot_hash": bm_key.split(":", 1)[-1], **bm},
-                    source="whoop",
-                    provenance={"connector": "whoop", "dedupe_key": bm_key},
-                    occurred_at=measured_at,
-                    committed_raw_event_type="whoop_body_measurement",
+                occurred = normalize_whoop_occurred(
+                    ("start", "cycle_start_time", "sleep_start_time", "created_at", "end"),
+                    record,
                 )
-                if out_bm.get("status") == "committed" and isinstance(out_bm.get("raw_event_id"), str):
-                    totals["body_measurement"]["ingested"] += 1
-                    with db.transaction() as cur3:
-                        record_idempotency(cur3, connector, bm_key, str(out_bm["raw_event_id"]))
+                at_iso = occurred or fallback_at
 
-    with db.transaction() as cur_fin:
-        st = fetch_connector_state(cur_fin, "whoop")
-        st.setdefault("sync", {})
-        st["sync"]["last_success_at"] = utc_now_iso()
-        st["sync"]["last_window_start"] = start_iso
-        st["sync"]["last_window_end"] = end_iso
-        put_connector_state(cur_fin, "whoop", st)
+                payload = dict(record)
+                rid = payload.get("id")
+                payload.setdefault("whoop_id", rid)
+                provenance = {"connector": "whoop", "whoop_stable_id": sid_key}
+                out = svc.ingest(
+                    domain=meta["domain"],
+                    payload=payload,
+                    source="whoop",
+                    provenance=provenance,
+                    occurred_at=at_iso,
+                    committed_raw_event_type=meta["event_type"],
+                )
+                if out.get("status") == "committed" and isinstance(out.get("raw_event_id"), str):
+                    raw_id_val = str(out["raw_event_id"])
+                    totals[meta["key"]]["ingested"] += 1
+                    with db.transaction() as cur2:
+                        record_idempotency(cur2, connector, sid_key, raw_id_val)
+
+        bm = client.get_body_measurement()
+        totals["body_measurement"]["fetched"] = int(bool(bm))
+        if bm:
+            bm_key = _body_measurement_dedupe_key(bm)
+            with db.transaction() as cur_bm:
+                if idempotency_seen(cur_bm, connector, bm_key):
+                    totals["body_measurement"]["skipped_duplicate"] += 1
+                else:
+                    measured_at = normalize_whoop_occurred(("measurement_timestamp",), bm) or fallback_at
+                    out_bm = svc.ingest(
+                        domain="whoop_body_measurement",
+                        payload={"snapshot_hash": bm_key.split(":", 1)[-1], **bm},
+                        source="whoop",
+                        provenance={"connector": "whoop", "dedupe_key": bm_key},
+                        occurred_at=measured_at,
+                        committed_raw_event_type="whoop_body_measurement",
+                    )
+                    if out_bm.get("status") == "committed" and isinstance(out_bm.get("raw_event_id"), str):
+                        totals["body_measurement"]["ingested"] += 1
+                        with db.transaction() as cur3:
+                            record_idempotency(cur3, connector, bm_key, str(out_bm["raw_event_id"]))
+    except Exception as e:
+        _mark_whoop_sync_failure(db, str(e))
+        raise
 
     totals["window"] = {"start": start_iso, "end": end_iso}
+    _mark_whoop_sync_success(db, start_iso=start_iso, end_iso=end_iso, totals=totals)
     return {"ok": True, "totals": totals}

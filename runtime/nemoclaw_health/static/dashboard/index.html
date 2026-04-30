@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nemoclaw Health</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>Nemoclaw Health</h1>
+    <div id="authBar" class="auth-bar"></div>
+  </header>
+
+  <div id="loginPanel" class="panel hidden">
+    <h2>Sign in</h2>
+    <p class="muted">Required when <code>NEMOWLAW_DASHBOARD_PASSWORD</code> is set on the server.</p>
+    <form id="loginForm">
+      <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password" />
+      <button type="submit">Sign in</button>
+    </form>
+    <pre id="loginErr" class="error"></pre>
+  </div>
+
+  <nav id="mainNav" class="nav hidden">
+    <button type="button" data-tab="onboard">Onboarding</button>
+    <button type="button" data-tab="chat">Chat</button>
+    <button type="button" data-tab="timeline">Timeline</button>
+    <button type="button" data-tab="data">Log data</button>
+    <button type="button" data-tab="integrations">WHOOP &amp; Health</button>
+    <button type="button" data-tab="debug">Debug</button>
+    <button type="button" data-tab="backup">Backup</button>
+  </nav>
+
+  <main id="main">
+    <section id="tab-onboard" class="tab hidden">
+      <h2>Onboarding</h2>
+      <p class="muted">Answer briefly, then review and confirm before saving to your profile.</p>
+      <div class="grid2">
+        <label>Primary goal <select id="obGoal">
+          <option value="weight_loss">Weight loss</option>
+          <option value="nutrition">Nutrition focus</option>
+          <option value="athletic">Athletic performance</option>
+          <option value="mixed">Mixed / several</option>
+        </select></label>
+        <label>Intensity <select id="obIntensity">
+          <option value="light">Light</option>
+          <option value="moderate" selected>Moderate</option>
+          <option value="aggressive">Aggressive</option>
+        </select></label>
+      </div>
+      <label>Notes for your coach (free text)</label>
+      <textarea id="obNotes" rows="4" placeholder="Injuries, schedule, equipment, preferences…"></textarea>
+      <button type="button" id="obPreviewChat">Preview with /v1/chat (optional)</button>
+      <pre id="obChatPreview" class="preview"></pre>
+      <h3>Review &amp; confirm</h3>
+      <pre id="obSummary" class="preview"></pre>
+      <button type="button" id="obSave">Save to profile &amp; goal</button>
+      <pre id="obStatus"></pre>
+    </section>
+
+    <section id="tab-chat" class="tab hidden">
+      <h2>Chat</h2>
+      <form id="chatForm">
+        <textarea id="chatMessage" rows="3" placeholder="Message to Popeye…"></textarea>
+        <button type="submit">Send</button>
+      </form>
+      <pre id="chatOut" class="preview"></pre>
+    </section>
+
+    <section id="tab-timeline" class="tab hidden">
+      <h2>Timeline</h2>
+      <label>Filter source <input id="tlSource" placeholder="e.g. whoop, healthkit_export" /></label>
+      <button type="button" id="tlLoad">Load</button>
+      <pre id="tlOut" class="preview"></pre>
+    </section>
+
+    <section id="tab-data" class="tab hidden">
+      <h2>Log data</h2>
+      <label>Domain slug <input id="deDomain" placeholder="food_log" value="food_log" /></label>
+      <label>Source <input id="deSource" value="manual" /></label>
+      <label>Payload JSON <textarea id="dePayload" rows="6">{"meal": "lunch", "items": "chicken salad"}</textarea></label>
+      <button type="button" id="deReg">Register domain (if new)</button>
+      <button type="button" id="deIngest">Ingest</button>
+      <pre id="deOut" class="preview"></pre>
+    </section>
+
+    <section id="tab-integrations" class="tab hidden">
+      <h2>Integrations</h2>
+      <div class="card">
+        <h3>WHOOP</h3>
+        <pre id="whoopStatus" class="preview"></pre>
+        <button type="button" id="whoopUrl">Open authorize URL</button>
+        <button type="button" id="whoopSync">Sync now</button>
+        <button type="button" id="whoopRefresh">Refresh status</button>
+      </div>
+      <div class="card">
+        <h3>Apple Health export</h3>
+        <p class="muted">Export ZIP from iPhone (Health → Profile → Export) then upload.</p>
+        <input type="file" id="appleFile" accept=".zip,application/zip" />
+        <button type="button" id="appleUpload">Import</button>
+        <pre id="appleStatus" class="preview"></pre>
+      </div>
+    </section>
+
+    <section id="tab-debug" class="tab hidden">
+      <h2>Debug</h2>
+      <button type="button" id="dbgSessions">Load recent sessions</button>
+      <pre id="dbgSessionsOut" class="preview"></pre>
+      <label>Task id <input id="dbgTaskId" placeholder="from chat response" /></label>
+      <button type="button" id="dbgTrace">Load trace</button>
+      <button type="button" id="dbgAnalyze">Analyze</button>
+      <pre id="dbgTraceOut" class="preview"></pre>
+    </section>
+
+    <section id="tab-backup" class="tab hidden">
+      <h2>Backup</h2>
+      <p class="muted">Exports JSONL under your data dir; copy <code>nemoclaw.sqlite</code> from the server for full backup.</p>
+      <button type="button" id="bkExport">Run export-raw-jsonl</button>
+      <pre id="bkOut" class="preview"></pre>
+      <button type="button" id="bkSummary">Storage summary</button>
+      <pre id="bkSumOut" class="preview"></pre>
+    </section>
+  </main>
+
+  <script src="/assets/app.js" type="module"></script>
+</body>
+</html>

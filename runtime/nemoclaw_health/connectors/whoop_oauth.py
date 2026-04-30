@@ -138,7 +138,13 @@ def oauth_status_from_state(whoop_json: dict[str, Any]) -> dict[str, Any]:
     oauth = whoop_json.get("oauth") or {}
     sync = whoop_json.get("sync") or {}
     if not oauth:
-        return {"connected": False}
+        return {
+            "connected": False,
+            "last_sync_success_at": sync.get("last_success_at"),
+            "last_sync_attempt_at": sync.get("last_attempt_at"),
+            "last_sync_ok": sync.get("last_sync_ok"),
+            "last_error": sync.get("last_error"),
+        }
     expires_at = int(oauth.get("expires_at") or 0)
     now = int(time.time())
     return {
@@ -148,15 +154,23 @@ def oauth_status_from_state(whoop_json: dict[str, Any]) -> dict[str, Any]:
         "has_refresh_token": bool(oauth.get("refresh_token")),
         "scopes": oauth.get("scope"),
         "last_sync_success_at": sync.get("last_success_at"),
+        "last_sync_attempt_at": sync.get("last_attempt_at"),
+        "last_sync_ok": sync.get("last_sync_ok"),
+        "last_error": sync.get("last_error"),
     }
 
 
 def disconnect_whoop(database: Database) -> dict[str, Any]:
-    """Clear WHOOP OAuth tokens but keep harmless sync bookkeeping."""
+    """Clear WHOOP OAuth tokens; preserve last sync timestamps but drop errors."""
     with database.transaction() as cur:
         st = fetch_connector_state(cur, "whoop")
         st.pop("oauth", None)
         st.pop("oauth_pending", None)
+        sync = st.get("sync")
+        if isinstance(sync, dict):
+            sync.pop("last_error", None)
+            sync.pop("last_sync_ok", None)
+            st["sync"] = sync
         put_connector_state(cur, "whoop", st)
     return {"ok": True}
 
