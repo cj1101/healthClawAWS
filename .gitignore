@@ -18,6 +18,10 @@ vendor/openclaw-health/skills/health-coach/data/raw/
 vendor/openclaw-health/skills/health-coach/data/health_store.json
 vendor/openclaw-health/skills/health-coach/**/*.pyc
 
+# Local Nemoclaw data (SQLite, JSONL artifacts)
+/data/
+/runtime/data/
+
 # OS / IDE
 .DS_Store
 Thumbs.db
