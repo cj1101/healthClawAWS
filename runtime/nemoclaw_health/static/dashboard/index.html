@@ -90,7 +90,11 @@
       <div class="card">
         <h3>WHOOP</h3>
         <pre id="whoopStatus" class="preview"></pre>
+        <p class="muted">OAuth app: <a href="https://developer-dashboard.whoop.com/apps" target="_blank" rel="noopener noreferrer">WHOOP Developer Dashboard</a> (redirect URI must match <code>NEMOWLAW_WHOOP_REDIRECT_URI</code>).</p>
         <button type="button" id="whoopUrl">Open authorize URL</button>
+        <button type="button" id="whoopCopyAuthUrl" class="hidden">Copy authorize URL</button>
+        <a id="whoopAuthLink" class="hidden" href="#" target="_blank" rel="noopener noreferrer">Open authorize in this tab</a>
+        <pre id="whoopAuthErr" class="error"></pre>
         <button type="button" id="whoopSync">Sync now</button>
         <button type="button" id="whoopRefresh">Refresh status</button>
       </div>

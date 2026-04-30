@@ -76,6 +76,7 @@ def token_exchange_refresh(settings: Settings, *, refresh_token: str) -> dict[st
         "refresh_token": refresh_token,
         "client_id": settings.whoop_client_id,
         "client_secret": settings.whoop_client_secret,
+        "scope": "offline",
     }
     with httpx.Client() as cli:
         r = cli.post(str(settings.whoop_token_url), data=data, timeout=30)
@@ -91,7 +92,8 @@ def build_authorization_url(database: Database, settings: Settings, scopes: list
     """Generate WHOOP authorize URL and persist oauth_pending CSRF state in connector_states."""
     require_whoop_config(settings)
     scopes_list = scopes or WHOOP_DEFAULT_SCOPES[:]
-    state = secrets.token_urlsafe(24)
+    # WHOOP OAuth docs: state must be eight characters when you generate it yourself.
+    state = secrets.token_hex(4)
     with database.transaction() as cur:
         st = fetch_connector_state(cur, "whoop")
         st["oauth_pending"] = {"state": state, "created_at_unix": int(time.time())}

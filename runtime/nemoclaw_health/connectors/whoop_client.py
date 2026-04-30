@@ -99,6 +99,43 @@ class WhoopAPIClient:
             payload = self._request(session, "GET", "v2/user/measurement/body")
         return payload if isinstance(payload, dict) else {}
 
+    def get_profile_basic(self) -> dict[str, Any]:
+        with httpx.Client() as session:
+            payload = self._request(session, "GET", "v2/user/profile/basic")
+        return payload if isinstance(payload, dict) else {}
+
+    def get_workout_by_id(self, workout_id: str) -> dict[str, Any]:
+        wid = str(workout_id).strip()
+        if not wid:
+            return {}
+        with httpx.Client() as session:
+            payload = self._request(session, "GET", f"v2/activity/workout/{wid}")
+        return payload if isinstance(payload, dict) else {}
+
+    def get_sleep_by_id(self, sleep_id: str) -> dict[str, Any]:
+        sid = str(sleep_id).strip()
+        if not sid:
+            return {}
+        with httpx.Client() as session:
+            payload = self._request(session, "GET", f"v2/activity/sleep/{sid}")
+        return payload if isinstance(payload, dict) else {}
+
+    def map_activity_v1_to_v2(self, activity_v1_id: int) -> str | None:
+        """One-time migration: GET /v1/activity-mapping/{id}. Returns None if no mapping (404)."""
+        with httpx.Client() as session:
+            base = self.settings.whoop_api_base.rstrip("/")
+            url = f"{base}/v1/activity-mapping/{int(activity_v1_id)}"
+            resp = session.get(url, headers=self._headers(), timeout=45)
+            if resp.status_code == 404:
+                return None
+            if resp.status_code >= 400:
+                raise RuntimeError(f"WHOOP {resp.status_code} activity-mapping: {resp.text[:400]}")
+            if not resp.text.strip():
+                return None
+            data = resp.json()
+            raw = data.get("v2_activity_id")
+            return str(raw) if raw is not None else None
+
 
 def default_window_iso(days: int) -> tuple[str, str]:
     now = datetime.now(timezone.utc)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -466,7 +467,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         contents = await file.read()
         path.write_bytes(contents)
         try:
-            result = ingest_apple_health_export_from_zip(db, path)
+            result = await asyncio.to_thread(ingest_apple_health_export_from_zip, db, path)
         finally:
             try:
                 path.unlink(missing_ok=True)

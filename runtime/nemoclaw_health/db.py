@@ -11,7 +11,7 @@ from typing import Any, Generator, Iterable
 
 from nemoclaw_health.settings import Settings
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _DYN_SLUG_OK = re.compile(r"^[a-z0-9_]{1,48}$")
 
@@ -119,6 +119,10 @@ class Database:
             self._local.conn.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_ms)}")
         return self._local.conn
 
+    def get_connection(self) -> sqlite3.Connection:
+        """Thread-local SQLite connection (e.g. long streams with periodic commits)."""
+        return self._conn()
+
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Cursor, None, None]:
         cx = self._conn()
@@ -150,6 +154,47 @@ class Database:
                   created_at TEXT NOT NULL DEFAULT (datetime('now')),
                   PRIMARY KEY (connector_id, dedupe_key)
                 )
+                """
+            )
+        if from_version < 4:
+            cx.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS whoop_workout (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  user_id INTEGER,
+                  start TEXT,
+                  end TEXT,
+                  payload_json TEXT NOT NULL,
+                  fetched_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS whoop_sleep (
+                  id TEXT PRIMARY KEY NOT NULL,
+                  cycle_id INTEGER,
+                  payload_json TEXT NOT NULL,
+                  fetched_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS whoop_recovery (
+                  sleep_id TEXT PRIMARY KEY NOT NULL,
+                  cycle_id INTEGER,
+                  payload_json TEXT NOT NULL,
+                  fetched_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS whoop_cycle (
+                  id INTEGER PRIMARY KEY NOT NULL,
+                  payload_json TEXT NOT NULL,
+                  fetched_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS whoop_body_measurement_snapshot (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  snapshot_hash TEXT NOT NULL UNIQUE,
+                  payload_json TEXT NOT NULL,
+                  fetched_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS whoop_profile (
+                  user_id INTEGER PRIMARY KEY NOT NULL,
+                  payload_json TEXT NOT NULL,
+                  fetched_at TEXT NOT NULL
+                );
                 """
             )
         cx.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -427,6 +472,152 @@ def record_idempotency(conn: sqlite3.Cursor, connector_id: str, dedupe_key: str,
         VALUES (?, ?, ?)
         """,
         (connector_id, dedupe_key, raw_event_id),
+    )
+
+
+def upsert_whoop_workout(conn: sqlite3.Cursor, payload: dict[str, Any], *, fetched_at: str) -> None:
+    rid = payload.get("id")
+    if rid is None or isinstance(rid, dict):
+        return
+    rid_s = str(rid).strip()
+    if not rid_s:
+        return
+    user_raw = payload.get("user_id")
+    user_id_i: int | None
+    try:
+        user_id_i = int(user_raw) if user_raw is not None and not isinstance(user_raw, dict) else None
+    except (TypeError, ValueError):
+        user_id_i = None
+    start_s = str(payload["start"]) if isinstance(payload.get("start"), str) else None
+    end_s = str(payload["end"]) if isinstance(payload.get("end"), str) else None
+    blob = json.dumps(payload, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO whoop_workout (id, user_id, start, end, payload_json, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          user_id = excluded.user_id,
+          start = excluded.start,
+          end = excluded.end,
+          payload_json = excluded.payload_json,
+          fetched_at = excluded.fetched_at
+        """,
+        (rid_s, user_id_i, start_s, end_s, blob, fetched_at),
+    )
+
+
+def upsert_whoop_sleep(conn: sqlite3.Cursor, payload: dict[str, Any], *, fetched_at: str) -> None:
+    rid = payload.get("id")
+    if rid is None or isinstance(rid, dict):
+        return
+    rid_s = str(rid).strip()
+    if not rid_s:
+        return
+    cyc = payload.get("cycle_id")
+    try:
+        cycle_i = int(cyc) if cyc is not None and not isinstance(cyc, dict) else None
+    except (TypeError, ValueError):
+        cycle_i = None
+    blob = json.dumps(payload, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO whoop_sleep (id, cycle_id, payload_json, fetched_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          cycle_id = excluded.cycle_id,
+          payload_json = excluded.payload_json,
+          fetched_at = excluded.fetched_at
+        """,
+        (rid_s, cycle_i, blob, fetched_at),
+    )
+
+
+def upsert_whoop_recovery(conn: sqlite3.Cursor, payload: dict[str, Any], *, fetched_at: str) -> None:
+    sid = payload.get("sleep_id")
+    if sid is None or isinstance(sid, dict):
+        return
+    sleep_s = str(sid).strip()
+    if not sleep_s:
+        return
+    cyc = payload.get("cycle_id")
+    try:
+        cycle_i = int(cyc) if cyc is not None and not isinstance(cyc, dict) else None
+    except (TypeError, ValueError):
+        cycle_i = None
+    blob = json.dumps(payload, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO whoop_recovery (sleep_id, cycle_id, payload_json, fetched_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(sleep_id) DO UPDATE SET
+          cycle_id = excluded.cycle_id,
+          payload_json = excluded.payload_json,
+          fetched_at = excluded.fetched_at
+        """,
+        (sleep_s, cycle_i, blob, fetched_at),
+    )
+
+
+def upsert_whoop_cycle(conn: sqlite3.Cursor, payload: dict[str, Any], *, fetched_at: str) -> None:
+    rid = payload.get("id")
+    if rid is None or isinstance(rid, dict):
+        return
+    try:
+        cid = int(rid)
+    except (TypeError, ValueError):
+        return
+    blob = json.dumps(payload, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO whoop_cycle (id, payload_json, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          fetched_at = excluded.fetched_at
+        """,
+        (cid, blob, fetched_at),
+    )
+
+
+def upsert_whoop_body_measurement_snapshot(
+    conn: sqlite3.Cursor,
+    *,
+    snapshot_hash: str,
+    payload: dict[str, Any],
+    fetched_at: str,
+) -> None:
+    h = snapshot_hash.strip()
+    if not h:
+        return
+    blob = json.dumps(payload, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO whoop_body_measurement_snapshot (snapshot_hash, payload_json, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(snapshot_hash) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          fetched_at = excluded.fetched_at
+        """,
+        (h, blob, fetched_at),
+    )
+
+
+def upsert_whoop_profile(conn: sqlite3.Cursor, payload: dict[str, Any], *, fetched_at: str) -> None:
+    uid = payload.get("user_id")
+    try:
+        user_id_i = int(uid)
+    except (TypeError, ValueError):
+        return
+    blob = json.dumps(payload, ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO whoop_profile (user_id, payload_json, fetched_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          fetched_at = excluded.fetched_at
+        """,
+        (user_id_i, blob, fetched_at),
     )
 
 

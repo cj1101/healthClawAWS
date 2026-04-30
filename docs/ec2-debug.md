@@ -118,6 +118,8 @@ Target **Python 3.11+**. Ubuntu **24.04 LTS** ships a suitable `python3`. On **2
 
 Nginx sets **`client_max_body_size 200m`**. If a larger export fails with **413**, raise this in the site config and reload Nginx.
 
+Large `export.xml` inside the ZIP can take many minutes to ingest. Site templates set **`proxy_read_timeout`** / **`proxy_send_timeout`** to **3600s** so nginx does not return **504 Gateway Timeout** while uvicorn is still working. After editing the site file: **`sudo nginx -t && sudo systemctl reload nginx`**. If you terminate TLS or HTTP at an **AWS ALB** (or similar) in front of the instance, also raise that load balancer’s **idle timeout** so it is not shorter than the longest expected import.
+
 ### Rollback
 
 ```bash

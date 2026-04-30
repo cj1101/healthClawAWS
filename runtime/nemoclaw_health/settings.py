@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     whoop_api_base: str = WHOOP_API_BASE_DEFAULT
     whoop_http_max_retries: int = 4
     whoop_default_sync_days: int = 7
+    # If true, refetch each workout/sleep via GET-by-id after listing (more API calls; use if list payloads omit fields).
+    whoop_fetch_activity_detail: bool = False
 
     dashboard_password: str | None = None
     session_secret: str | None = None

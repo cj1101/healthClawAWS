@@ -193,9 +193,60 @@ async function main() {
   };
 
   $("whoopRefresh")?.addEventListener("click", whoopRefresh);
+  const hideWhoopAuthExtras = () => {
+    $("whoopAuthErr").textContent = "";
+    $("whoopCopyAuthUrl")?.classList.add("hidden");
+    $("whoopAuthLink")?.classList.add("hidden");
+  };
   $("whoopUrl")?.addEventListener("click", async () => {
-    const u = await api("v1/connectors/whoop/authorize-url");
-    if (u.authorization_url) window.open(u.authorization_url, "_blank", "noopener");
+    hideWhoopAuthExtras();
+    try {
+      const u = await api("v1/connectors/whoop/authorize-url");
+      const url = u?.authorization_url;
+      if (!url || typeof url !== "string") {
+        $("whoopAuthErr").textContent = "No authorization_url in response.";
+        $("whoopStatus").textContent = JSON.stringify(u, null, 2);
+        return;
+      }
+      $("whoopStatus").textContent = JSON.stringify({ authorization_url: url, hint: "popup_blocked_use_copy_or_link" }, null, 2);
+      const win = window.open(url, "_blank", "noopener");
+      if (!win || win.closed) {
+        $("whoopCopyAuthUrl")?.classList.remove("hidden");
+        $("whoopAuthLink")?.classList.remove("hidden");
+        const a = $("whoopAuthLink");
+        if (a) a.href = url;
+        $("whoopAuthErr").textContent =
+          "Popup may be blocked. Use “Copy authorize URL” or the link below, then complete sign-in at WHOOP.";
+      }
+    } catch (e) {
+      const detail = e?.body?.detail;
+      $("whoopAuthErr").textContent =
+        typeof detail === "string"
+          ? detail
+          : e?.message || String(e);
+      $("whoopStatus").textContent = JSON.stringify(
+        { error: e?.message || String(e), detail: e?.body?.detail ?? null },
+        null,
+        2,
+      );
+    }
+  });
+  $("whoopCopyAuthUrl")?.addEventListener("click", async () => {
+    const pre = $("whoopStatus")?.textContent || "";
+    let url = "";
+    try {
+      const j = JSON.parse(pre);
+      url = j.authorization_url || "";
+    } catch {
+      /* ignore */
+    }
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      $("whoopAuthErr").textContent = "Copied authorize URL to clipboard.";
+    } catch {
+      $("whoopAuthErr").textContent = "Could not copy (clipboard blocked). Use the link above.";
+    }
   });
   $("whoopSync")?.addEventListener("click", async () => {
     const out = await api("v1/connectors/whoop/sync", { method: "POST", body: "{}" });
@@ -210,8 +261,17 @@ async function main() {
     const fd = new FormData();
     fd.append("file", f, f.name);
     const r = await fetch("v1/connectors/apple-health/import", { method: "POST", credentials: "include", body: fd });
+    const ct = r.headers.get("content-type") || "";
     const text = await r.text();
-    $("appleStatus").textContent = text;
+    let display = text;
+    if (!r.ok || (ct && !ct.includes("json"))) {
+      const proxyHint =
+        r.status === 504 || (ct.includes("text/html") && /504|Gateway Time-?out/i.test(text))
+          ? "\n\nHint: Large Apple Health exports can take many minutes. Raise nginx proxy_read_timeout / proxy_send_timeout (e.g. 3600s) and any load balancer idle timeout above the expected import duration."
+          : "";
+      display = `HTTP ${r.status}${r.statusText ? ` ${r.statusText}` : ""}${proxyHint}\n\n${text}`;
+    }
+    $("appleStatus").textContent = display;
     await whoopRefresh();
   });
 
