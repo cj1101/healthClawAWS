@@ -6,6 +6,7 @@ Phase 0 **contracts**, **Joy safety artifacts**, and a **vendored** copy of the 
 
 | Path | Purpose |
 |------|---------|
+| `runtime/nemoclaw_health/` | FastAPI service: orchestrator, data plane, WHOOP / Apple connectors |
 | `specs/phase0/contracts/` | Agent contracts, event schema, permissions, tool registry |
 | `specs/phase0/safety/` | Safety policy, Joy templates, escalation rules, regression cases |
 | `vendor/openclaw-health/` | Imported OpenClaw `health-coach` skill + `workspace/agent-network` configs |
@@ -17,6 +18,49 @@ Phase 0 **contracts**, **Joy safety artifacts**, and a **vendored** copy of the 
 npm install
 npm run validate:phase0
 ```
+
+## Phase 1 + 2 runtime (FastAPI)
+
+From repo root:
+
+```bash
+pip install -r requirements.txt
+npm run validate:phase2    # Phase 0 JSON/AJV checks + pytest
+```
+
+Serve locally:
+
+```bash
+cd runtime
+PYTHONPATH=. uvicorn nemoclaw_health.app:app --reload --host 0.0.0.0 --port 8000
+```
+
+| Area | Highlights |
+|------|------------|
+| Phase 1 | `/v1/chat`, data-entry, SQLite retention, contract validation |
+| Phase 2 | WHOOP OAuth + sync (`/v1/connectors/whoop/*`), Apple Health export ZIP import (`/v1/connectors/apple-health/*`) |
+
+### Storage & retention
+
+| Entity | Policy |
+|--------|--------|
+| `raw_events` | Default **90-day** prune (`NEMOWLAW_RAW_EVENT_RETENTION_DAYS`). Deletes matching rows in `evt_dyn_<slug>` when `provenance_json.dyn_row` links them so timelines stay aligned. |
+| `connector_idempotency` | Rows referencing pruned `raw_events.id` are removed so connectors can re-ingest later windows if needed. |
+| `delegation_events`, `agent_runs` | Optional prune via `NEMOWLAW_DELEGATION_METADATA_RETENTION_DAYS` (omit or `0` = disabled); never deletes goals/profile/`derived_summaries`. |
+| SQLite durability | WAL journal mode + configurable busy timeout (`NEMOWLAW_SQLITE_BUSY_TIMEOUT_MS`). |
+| Export | `POST /v1/storage/export-raw-jsonl` writes JSONL under `data_dir`; copy `nemoclaw.sqlite` separately for full backup. |
+
+### WHOOP developer app
+
+- Register a WHOOP OAuth app at the WHOOP developer console.
+- Redirect URI **must match** [`NEMOWLAW_WHOOP_REDIRECT_URI`](runtime/nemoclaw_health/settings.py), e.g. `https://your-host/v1/connectors/whoop/callback`.
+- Set `NEMOWLAW_WHOOP_CLIENT_ID`, `NEMOWLAW_WHOOP_CLIENT_SECRET`, `NEMOWLAW_WHOOP_REDIRECT_URI` (optional overrides: `NEMOWLAW_WHOOP_AUTH_URL`, `NEMOWLAW_WHOOP_TOKEN_URL`, `NEMOWLAW_WHOOP_API_BASE`).
+
+Flow: `GET /v1/connectors/whoop/authorize-url` → browser → `GET /v1/connectors/whoop/callback` → `POST /v1/connectors/whoop/sync`.
+
+### Apple Health export (Phase 2)
+
+On iPhone: Health → profile → Export All Health Data → use the decrypted export that contains **`apple_health_export/export.xml`** (usually packaged as a ZIP). Upload that ZIP to `POST /v1/connectors/apple-health/import` (multipart field `file`). Re-importing the same data dedupes on stable keys / metadata sync IDs.
 
 ## Python smoke (vendor skill)
 

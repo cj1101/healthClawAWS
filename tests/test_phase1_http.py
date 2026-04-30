@@ -39,3 +39,19 @@ def test_http_chat(iso_test_settings):
     assert resp.status_code == 200
     body = resp.json()
     assert "reply" in body
+
+
+def test_http_ingest_invalid_source(iso_test_settings):
+    client = TestClient(create_app(iso_test_settings))
+    resp = client.post(
+        "/v1/data/ingest",
+        json={"domain": "x", "payload": {}, "source": "unknown_vendor"},
+    )
+    assert resp.status_code == 400
+
+
+def test_http_delegation_prune_skipped_when_unconfigured(iso_test_settings):
+    client = TestClient(create_app(iso_test_settings))
+    resp = client.post("/v1/jobs/delegation-prune", json={"dry_run": True})
+    assert resp.status_code == 200
+    assert resp.json().get("skipped") is True
