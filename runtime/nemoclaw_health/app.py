@@ -22,6 +22,7 @@ from nemoclaw_health.connectors.whoop_oauth import (
     WhoopOAuthError,
     WhoopStateError,
     build_authorization_url,
+    callback_url_from_request,
     disconnect_whoop,
     exchange_callback_code,
     oauth_status_from_state,
@@ -402,11 +403,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return oauth_status_from_state(blob)
 
     @app.get("/v1/connectors/whoop/authorize-url")
-    def whoop_authorize_url(s: Settings = Depends(svc_settings)):
+    def whoop_authorize_url(request: Request, s: Settings = Depends(svc_settings)):
         db = get_db(s)
         try:
-            url = build_authorization_url(db, s)
-            return {"authorization_url": url}
+            env_rd = (s.whoop_redirect_uri or "").strip()
+            effective_redirect = env_rd or callback_url_from_request(request)
+            url = build_authorization_url(db, s, redirect_uri=effective_redirect)
+            return {"authorization_url": url, "redirect_uri": effective_redirect}
         except WhoopConfigError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
 

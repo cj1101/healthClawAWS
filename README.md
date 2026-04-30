@@ -56,8 +56,8 @@ Open `http://localhost:8000/` for the dashboard (static UI). Set `NEMOWLAW_DASHB
 ### WHOOP developer app
 
 - Create or edit your OAuth app in the [WHOOP Developer Dashboard](https://developer-dashboard.whoop.com/apps).
-- Redirect URI **must match** [`NEMOWLAW_WHOOP_REDIRECT_URI`](runtime/nemoclaw_health/settings.py), e.g. `https://your-host/v1/connectors/whoop/callback`.
-- Set `NEMOWLAW_WHOOP_CLIENT_ID`, `NEMOWLAW_WHOOP_CLIENT_SECRET`, `NEMOWLAW_WHOOP_REDIRECT_URI` (optional overrides: `NEMOWLAW_WHOOP_AUTH_URL`, `NEMOWLAW_WHOOP_TOKEN_URL`, `NEMOWLAW_WHOOP_API_BASE`, `NEMOWLAW_WHOOP_FETCH_ACTIVITY_DETAIL` to refetch each workout/sleep by id after listing).
+- Redirect URI **must match** what WHOOP sends on the wire: either set [`NEMOWLAW_WHOOP_REDIRECT_URI`](runtime/nemoclaw_health/settings.py) to the exact registered URL (e.g. `https://your-host/v1/connectors/whoop/callback`), or **omit** it and use **Authorize** from the same origin you open in the browser (the API then derives `redirect_uri` from the request; behind a reverse proxy, set `X-Forwarded-Proto` / `X-Forwarded-Host`). The JSON from `GET /v1/connectors/whoop/authorize-url` includes `redirect_uri` so you can paste it into the [WHOOP Developer Dashboard](https://developer-dashboard.whoop.com/apps) if needed.
+- Set `NEMOWLAW_WHOOP_CLIENT_ID`, `NEMOWLAW_WHOOP_CLIENT_SECRET`, and optionally `NEMOWLAW_WHOOP_REDIRECT_URI` (optional overrides: `NEMOWLAW_WHOOP_AUTH_URL`, `NEMOWLAW_WHOOP_TOKEN_URL`, `NEMOWLAW_WHOOP_API_BASE`, `NEMOWLAW_WHOOP_FETCH_ACTIVITY_DETAIL` to refetch each workout/sleep by id after listing).
 - **Troubleshooting:** If “Open authorize URL” shows nothing useful, check Integrations: `503` from `/v1/connectors/whoop/authorize-url` means missing or invalid WHOOP env vars; if the browser blocks pop-ups, use **Copy authorize URL** or the same-tab link shown after the click.
 
 Flow: `GET /v1/connectors/whoop/authorize-url` → browser → `GET /v1/connectors/whoop/callback` → `POST /v1/connectors/whoop/sync`.

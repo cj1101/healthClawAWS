@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Any
 
 import httpx
+from starlette.requests import Request
 
 from nemoclaw_health.db import (
     Database,
@@ -37,11 +38,32 @@ class WhoopStateError(WhoopOAuthError):
     pass
 
 
-def require_whoop_config(settings: Settings) -> None:
+def callback_url_from_request(request: Request) -> str:
+    """Public redirect_uri for WHOOP OAuth, from the browser's view of this service.
+
+    Uses X-Forwarded-Proto / X-Forwarded-Host when set (typical behind TLS reverse proxy).
+    """
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").strip()
+    forwarded_host = (request.headers.get("x-forwarded-host") or "").strip()
+    if forwarded_proto and forwarded_host:
+        scheme = forwarded_proto.split(",")[0].strip()
+        host = forwarded_host.split(",")[0].strip()
+        base = f"{scheme}://{host}".rstrip("/")
+    else:
+        base = str(request.base_url).rstrip("/")
+    return f"{base}/v1/connectors/whoop/callback"
+
+
+def require_whoop_oauth_client(settings: Settings) -> None:
     settings.validate_whoop_oauth_urls()
     if not settings.whoop_client_id or not settings.whoop_client_secret:
         raise WhoopConfigError("NEMOWLAW_WHOOP_CLIENT_ID and NEMOWLAW_WHOOP_CLIENT_SECRET are required.")
-    if not settings.whoop_redirect_uri:
+
+
+def require_whoop_config(settings: Settings) -> None:
+    """Require client credentials and a static redirect URI (e.g. for callers without Request)."""
+    require_whoop_oauth_client(settings)
+    if not (settings.whoop_redirect_uri or "").strip():
         raise WhoopConfigError("NEMOWLAW_WHOOP_REDIRECT_URI is required.")
 
 
@@ -53,12 +75,20 @@ def _normalize_token_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def token_exchange_authorization_code(settings: Settings, *, code: str) -> dict[str, Any]:
-    require_whoop_config(settings)
+def token_exchange_authorization_code(
+    settings: Settings,
+    *,
+    code: str,
+    redirect_uri: str,
+) -> dict[str, Any]:
+    require_whoop_oauth_client(settings)
+    rd = (redirect_uri or "").strip()
+    if not rd:
+        raise WhoopOAuthError("missing redirect_uri for authorization_code token exchange.")
     data = {
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": settings.whoop_redirect_uri or "",
+        "redirect_uri": rd,
         "client_id": settings.whoop_client_id,
         "client_secret": settings.whoop_client_secret,
     }
@@ -70,7 +100,7 @@ def token_exchange_authorization_code(settings: Settings, *, code: str) -> dict[
 
 
 def token_exchange_refresh(settings: Settings, *, refresh_token: str) -> dict[str, Any]:
-    require_whoop_config(settings)
+    require_whoop_oauth_client(settings)
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -88,22 +118,40 @@ def token_exchange_refresh(settings: Settings, *, refresh_token: str) -> dict[st
     return _normalize_token_payload(refreshed)
 
 
-def build_authorization_url(database: Database, settings: Settings, scopes: list[str] | None = None) -> str:
-    """Generate WHOOP authorize URL and persist oauth_pending CSRF state in connector_states."""
-    require_whoop_config(settings)
+def build_authorization_url(
+    database: Database,
+    settings: Settings,
+    *,
+    redirect_uri: str,
+    scopes: list[str] | None = None,
+) -> str:
+    """Generate WHOOP authorize URL and persist oauth_pending (state + redirect_uri) in connector_states."""
+    require_whoop_oauth_client(settings)
+    rd = (redirect_uri or "").strip()
+    if not rd:
+        raise WhoopConfigError(
+            "WHOOP redirect_uri is empty. Set NEMOWLAW_WHOOP_REDIRECT_URI to the exact URL "
+            "registered at https://developer-dashboard.whoop.com/apps (e.g. "
+            "https://your-host/v1/connectors/whoop/callback), or omit it and open Authorize "
+            "from the same origin you use in the browser so it can be derived automatically."
+        )
     scopes_list = scopes or WHOOP_DEFAULT_SCOPES[:]
     # WHOOP OAuth docs: state must be eight characters when you generate it yourself.
     state = secrets.token_hex(4)
     with database.transaction() as cur:
         st = fetch_connector_state(cur, "whoop")
-        st["oauth_pending"] = {"state": state, "created_at_unix": int(time.time())}
+        st["oauth_pending"] = {
+            "state": state,
+            "created_at_unix": int(time.time()),
+            "redirect_uri": rd,
+        }
         put_connector_state(cur, "whoop", st)
 
     qs = urllib.parse.urlencode(
         {
             "response_type": "code",
             "client_id": settings.whoop_client_id,
-            "redirect_uri": settings.whoop_redirect_uri or "",
+            "redirect_uri": rd,
             "scope": " ".join(scopes_list),
             "state": state,
         },
@@ -120,15 +168,22 @@ def exchange_callback_code(
 ) -> dict[str, Any]:
     if not code:
         raise WhoopOAuthError("missing OAuth code.")
-    require_whoop_config(settings)
+    require_whoop_oauth_client(settings)
 
     with database.transaction() as cur:
         stored = fetch_connector_state(cur, "whoop").get("oauth_pending") or {}
         saved_state = stored.get("state")
+        pending_redirect = (stored.get("redirect_uri") or "").strip()
     if saved_state != state:
         raise WhoopStateError("oauth state mismatch — restart authorize flow.")
 
-    token = token_exchange_authorization_code(settings, code=code)
+    redirect_uri = pending_redirect or (settings.whoop_redirect_uri or "").strip()
+    if not redirect_uri:
+        raise WhoopConfigError(
+            "OAuth callback missing redirect_uri — start again from GET /v1/connectors/whoop/authorize-url."
+        )
+
+    token = token_exchange_authorization_code(settings, code=code, redirect_uri=redirect_uri)
     persist_oauth(database, token)
 
     with database.transaction() as cur:
@@ -197,7 +252,7 @@ def persist_oauth(database: Database, oauth_payload: dict[str, Any]) -> dict[str
 
 def ensure_whoop_access_token(database: Database, settings: Settings) -> str:
     """Return valid access_token, refreshing in-place when nearing expiry."""
-    require_whoop_config(settings)
+    require_whoop_oauth_client(settings)
 
     def _expires_in_window(oauth_blob: dict[str, Any]) -> bool:
         exp = int(oauth_blob.get("expires_at") or 0)

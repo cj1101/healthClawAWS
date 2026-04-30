@@ -208,7 +208,15 @@ async function main() {
         $("whoopStatus").textContent = JSON.stringify(u, null, 2);
         return;
       }
-      $("whoopStatus").textContent = JSON.stringify({ authorization_url: url, hint: "popup_blocked_use_copy_or_link" }, null, 2);
+      $("whoopStatus").textContent = JSON.stringify(
+        {
+          authorization_url: url,
+          redirect_uri: u.redirect_uri,
+          hint: "Register redirect_uri exactly in WHOOP Developer Dashboard; popup_blocked_use_copy_or_link",
+        },
+        null,
+        2,
+      );
       const win = window.open(url, "_blank", "noopener");
       if (!win || win.closed) {
         $("whoopCopyAuthUrl")?.classList.remove("hidden");
