@@ -15,6 +15,16 @@ def iso_test_settings(tmp_path):
         sqlite_path=data / "t.sqlite",
         artifact_log=data / "orchestration.jsonl",
         raw_event_retention_days=90,
+        # Explicitly clear production credentials so tests always run in
+        # deterministic stub mode with no auth wall, and WHOOP tests can
+        # assert on the "not configured" code path.
+        dashboard_password=None,
+        session_secret=None,
+        job_token=None,
+        openrouter_api_key=None,
+        whoop_client_id=None,
+        whoop_client_secret=None,
+        whoop_redirect_uri=None,
     )
     yield s
     reset_db_singleton()

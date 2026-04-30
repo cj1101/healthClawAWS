@@ -29,7 +29,7 @@ let authRequired = false;
 
 async function loadMe() {
   try {
-    await api("/v1/storage/summary");
+    await api("v1/storage/summary");
     authRequired = false;
     return true;
   } catch (e) {
@@ -63,7 +63,7 @@ async function refreshAuthBar() {
   bar.innerHTML =
     '<button type="button" id="logoutBtn">Sign out</button>';
   $("logoutBtn")?.addEventListener("click", async () => {
-    await api("/v1/auth/logout", { method: "POST", body: "{}" });
+    await api("v1/auth/logout", { method: "POST", body: "{}" });
     window.location.reload();
   });
 }
@@ -104,7 +104,7 @@ async function main() {
     const pw = $("loginPassword").value;
     $("loginErr").textContent = "";
     try {
-      await api("/v1/auth/login", { method: "POST", body: JSON.stringify({ password: pw }) });
+      await api("v1/auth/login", { method: "POST", body: JSON.stringify({ password: pw }) });
       window.location.reload();
     } catch (e) {
       $("loginErr").textContent = e.message || String(e);
@@ -119,7 +119,7 @@ async function main() {
 
   $("obPreviewChat")?.addEventListener("click", async () => {
     const msg = `Onboarding context: ${JSON.stringify(obSummary())}`;
-    const out = await api("/v1/chat", { method: "POST", body: JSON.stringify({ message: msg }) });
+    const out = await api("v1/chat", { method: "POST", body: JSON.stringify({ message: msg }) });
     $("obChatPreview").textContent = JSON.stringify(out, null, 2);
   });
 
@@ -127,11 +127,11 @@ async function main() {
     const summary = obSummary();
     $("obStatus").textContent = "";
     try {
-      await api("/v1/profile", {
+      await api("v1/profile", {
         method: "PUT",
         body: JSON.stringify({ onboarding: summary, onboarding_completed: true }),
       });
-      await api("/v1/goals", {
+      await api("v1/goals", {
         method: "POST",
         body: JSON.stringify({
           title: `Primary: ${summary.goal_primary}`,
@@ -147,20 +147,20 @@ async function main() {
   $("chatForm")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const msg = $("chatMessage").value;
-    const out = await api("/v1/chat", { method: "POST", body: JSON.stringify({ message: msg }) });
+    const out = await api("v1/chat", { method: "POST", body: JSON.stringify({ message: msg }) });
     $("chatOut").textContent = JSON.stringify(out, null, 2);
   });
 
   $("tlLoad")?.addEventListener("click", async () => {
     const src = $("tlSource").value.trim();
     const q = src ? `?source=${encodeURIComponent(src)}&limit=80` : "?limit=80";
-    const out = await api(`/v1/timeline${q}`);
+    const out = await api(`v1/timeline${q}`);
     $("tlOut").textContent = JSON.stringify(out, null, 2);
   });
 
   $("deReg")?.addEventListener("click", async () => {
     const domain = $("deDomain").value.trim();
-    const out = await api("/v1/data/domain", {
+    const out = await api("v1/data/domain", {
       method: "POST",
       body: JSON.stringify({ display_name: domain, schema_hint: ["items", "meal"] }),
     });
@@ -176,7 +176,7 @@ async function main() {
       $("deOut").textContent = "Invalid JSON: " + e.message;
       return;
     }
-    const out = await api("/v1/data/ingest", {
+    const out = await api("v1/data/ingest", {
       method: "POST",
       body: JSON.stringify({
         domain,
@@ -188,17 +188,17 @@ async function main() {
   });
 
   const whoopRefresh = async () => {
-    $("whoopStatus").textContent = JSON.stringify(await api("/v1/connectors/whoop/status"), null, 2);
-    $("appleStatus").textContent = JSON.stringify(await api("/v1/connectors/apple-health/status"), null, 2);
+    $("whoopStatus").textContent = JSON.stringify(await api("v1/connectors/whoop/status"), null, 2);
+    $("appleStatus").textContent = JSON.stringify(await api("v1/connectors/apple-health/status"), null, 2);
   };
 
   $("whoopRefresh")?.addEventListener("click", whoopRefresh);
   $("whoopUrl")?.addEventListener("click", async () => {
-    const u = await api("/v1/connectors/whoop/authorize-url");
+    const u = await api("v1/connectors/whoop/authorize-url");
     if (u.authorization_url) window.open(u.authorization_url, "_blank", "noopener");
   });
   $("whoopSync")?.addEventListener("click", async () => {
-    const out = await api("/v1/connectors/whoop/sync", { method: "POST", body: "{}" });
+    const out = await api("v1/connectors/whoop/sync", { method: "POST", body: "{}" });
     $("whoopStatus").textContent = JSON.stringify(out, null, 2);
   });
   $("appleUpload")?.addEventListener("click", async () => {
@@ -209,25 +209,25 @@ async function main() {
     }
     const fd = new FormData();
     fd.append("file", f, f.name);
-    const r = await fetch("/v1/connectors/apple-health/import", { method: "POST", credentials: "include", body: fd });
+    const r = await fetch("v1/connectors/apple-health/import", { method: "POST", credentials: "include", body: fd });
     const text = await r.text();
     $("appleStatus").textContent = text;
     await whoopRefresh();
   });
 
   $("dbgSessions")?.addEventListener("click", async () => {
-    const out = await api("/v1/debug/sessions");
+    const out = await api("v1/debug/sessions");
     $("dbgSessionsOut").textContent = JSON.stringify(out, null, 2);
   });
   $("dbgTrace")?.addEventListener("click", async () => {
     const tid = $("dbgTaskId").value.trim();
-    const out = await api(`/v1/debug/session/${encodeURIComponent(tid)}`);
+    const out = await api(`v1/debug/session/${encodeURIComponent(tid)}`);
     $("dbgTraceOut").textContent = JSON.stringify(out, null, 2);
   });
   $("dbgAnalyze")?.addEventListener("click", async () => {
     const tid = $("dbgTaskId").value.trim();
     const body = tid ? { task_id: tid } : {};
-    const out = await api("/v1/debug/analyze", {
+    const out = await api("v1/debug/analyze", {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
@@ -236,14 +236,14 @@ async function main() {
   });
 
   $("bkExport")?.addEventListener("click", async () => {
-    const out = await api("/v1/storage/export-raw-jsonl", {
+    const out = await api("v1/storage/export-raw-jsonl", {
       method: "POST",
       body: JSON.stringify({ dest_relative: "artifacts/dashboard_export.jsonl" }),
     });
     $("bkOut").textContent = JSON.stringify(out, null, 2);
   });
   $("bkSummary")?.addEventListener("click", async () => {
-    $("bkSumOut").textContent = JSON.stringify(await api("/v1/storage/summary"), null, 2);
+    $("bkSumOut").textContent = JSON.stringify(await api("v1/storage/summary"), null, 2);
   });
 
   if (ok) await whoopRefresh();
