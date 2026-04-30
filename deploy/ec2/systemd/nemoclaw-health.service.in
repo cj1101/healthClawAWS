@@ -1,0 +1,21 @@
+[Unit]
+Description=Nemoclaw Health API (uvicorn)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@DEPLOY_USER@
+Group=@DEPLOY_USER@
+WorkingDirectory=@REPO_ROOT@/runtime
+EnvironmentFile=-@REPO_ROOT@/.env
+ExecStart=@REPO_ROOT@/.venv/bin/uvicorn nemoclaw_health.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Hardening (paths must include SQLite + artifact dirs under data_dir)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

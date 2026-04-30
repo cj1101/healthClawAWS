@@ -1,0 +1,32 @@
+## Upstream (uvicorn on loopback)
+upstream nemoclaw_uvicorn {
+    server 127.0.0.1:8000;
+    keepalive 32;
+}
+
+# Start with HTTP only; after DNS works run:
+#   sudo certbot --nginx -d YOUR_DOMAIN
+# Certbot will add the TLS server (or upgrade this block) per its defaults.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name @SERVER_NAME@;
+
+    client_max_body_size 200m;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        proxy_pass http://nemoclaw_uvicorn;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+}

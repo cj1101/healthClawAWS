@@ -1,6 +1,6 @@
 # Nemoclaw Health — `healthClaw` on AWS
 
-Phase 0 **contracts**, **Joy safety artifacts**, and a **vendored** copy of the OpenClaw health stack live in this repo. Runtime targets an Ubuntu EC2 host; see [`docs/ec2-debug.md`](docs/ec2-debug.md).
+Phase 0 **contracts**, **Joy safety artifacts**, and a **vendored** copy of the OpenClaw health stack live in this repo. Runtime targets an Ubuntu EC2 host; see [`docs/ec2-debug.md`](docs/ec2-debug.md). **Wave D (production-lite EC2):** [`deploy/ec2/bootstrap.sh`](deploy/ec2/bootstrap.sh), systemd timers, and Nginx — see the Wave D section in [`docs/ec2-debug.md`](docs/ec2-debug.md).
 
 ## Layout
 
@@ -35,7 +35,7 @@ cd runtime
 PYTHONPATH=. uvicorn nemoclaw_health.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000/` for the dashboard (static UI). Set `NEMOWLAW_DASHBOARD_PASSWORD` to require sign-in for all `/v1/*` routes except `GET /healthz`, `POST /v1/auth/login`, and `GET /v1/connectors/whoop/callback`. Optional `NEMOWLAW_SESSION_SECRET` overrides the derived session signing key.
+Open `http://localhost:8000/` for the dashboard (static UI). Set `NEMOWLAW_DASHBOARD_PASSWORD` to require sign-in for all `/v1/*` routes except `GET /healthz`, `POST /v1/auth/login`, `GET /v1/connectors/whoop/callback`, and **`POST /v1/jobs/*` when `Authorization: Bearer <NEMOWLAW_JOB_TOKEN>` matches** (for systemd / cron). Optional `NEMOWLAW_SESSION_SECRET` overrides the derived session signing key. Example EC2 env: [`deploy/ec2/ec2.env.example`](deploy/ec2/ec2.env.example).
 
 | Area | Highlights |
 |------|------------|

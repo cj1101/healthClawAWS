@@ -1,0 +1,10 @@
+[Unit]
+Description=Nem WHOOP sync (Nemoclaw scheduled job)
+Wants=network-online.target nemoclaw-health.service
+After=network-online.target nemoclaw-health.service
+
+[Service]
+Type=oneshot
+User=@DEPLOY_USER@
+Group=@DEPLOY_USER@
+ExecStart=@REPO_ROOT@/deploy/ec2/scripts/curl-job.sh @REPO_ROOT@ /v1/jobs/whoop-sync

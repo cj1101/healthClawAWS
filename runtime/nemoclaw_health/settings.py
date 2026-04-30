@@ -34,6 +34,8 @@ class Settings(BaseSettings):
 
     dashboard_password: str | None = None
     session_secret: str | None = None
+    # Optional Bearer token for POST /v1/jobs/* when dashboard_password is set (systemd/cron).
+    job_token: str | None = None
 
     def resolved_sqlite(self) -> Path:
         return self.sqlite_path if self.sqlite_path is not None else self.data_dir / "nemoclaw.sqlite"

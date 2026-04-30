@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer for Nemoclaw retention prune jobs
+
+[Timer]
+OnCalendar=*-*-* 03:30
+Persistent=true
+Unit=nemoclaw-prune.service
+
+[Install]
+WantedBy=timers.target

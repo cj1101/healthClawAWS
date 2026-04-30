@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -38,6 +39,20 @@ def install_dashboard_auth(app: Any, settings: Settings) -> None:
                 return await call_next(request)
             if p == "/v1/auth/login" and request.method == "POST":
                 return await call_next(request)
+            if (
+                p.startswith("/v1/jobs/")
+                and settings.job_token
+                and settings.job_token.strip()
+                and request.method == "POST"
+            ):
+                raw = request.headers.get("authorization") or ""
+                parts = raw.split(None, 1)
+                if (
+                    len(parts) == 2
+                    and parts[0].lower() == "bearer"
+                    and secrets.compare_digest(parts[1].strip(), settings.job_token.strip())
+                ):
+                    return await call_next(request)
             if p.startswith("/v1/"):
                 sess = request.scope.get("session")
                 if not isinstance(sess, dict) or not sess.get("authenticated"):
