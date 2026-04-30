@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "tier_info_default",
+      "when": {
+        "signal_aggregate": ["any_non_redline_changes"]
+      },
+      "tier": "info",
+      "required_templates": ["JOY_INFO_V1"],
+      "playbook": "Surface calmly; cite signals; reinforce non-diagnostic stance."
+    },
+    {
+      "id": "tier_watch_persist_two_days",
+      "when": {
+        "biometric_flags": ["rhr_sleep_combo_deviation persists >= 48h"],
+        "max_severity_relative": "watch"
+      },
+      "tier": "watch",
+      "required_templates": ["JOY_WATCH_V1"],
+      "playbook": "Do not prescribe drugs; propose monitoring checkpoints; escalate to Popeye synthesis."
+    },
+    {
+      "id": "tier_urgent_multi_redline",
+      "when": {
+        "biometric_flags": ["two_or_more_hard_thresholds_same_day"]
+      },
+      "tier": "urgent",
+      "required_templates": ["JOY_URGENT_V1"],
+      "playbook": "High-visibility safety routing; still no diagnosis; encourage emergency services if applicable."
+    }
+  ]
+}

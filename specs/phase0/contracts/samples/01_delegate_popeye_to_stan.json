@@ -1,0 +1,18 @@
+{
+  "task_id": "task_20260430_delegate_nutrition_001",
+  "source_agent": "popeye",
+  "target_agent": "stan",
+  "intent": "nutrition_analysis",
+  "confidence": 0.86,
+  "risk": "low",
+  "payload": {
+    "date_local": "2026-04-30",
+    "focus": ["meal_timing", "protein_variance"]
+  },
+  "citations": [{ "ref": "whoop_bundle:local_db", "label": "Ingest snapshots" }],
+  "actions": [{ "type": "delegate", "detail": { "ttl_s": 120 } }],
+  "workflow_id": "wf_health_1775000001",
+  "team_id": "health",
+  "policy_decision": "auto",
+  "ts": "2026-04-30T12:00:00Z"
+}

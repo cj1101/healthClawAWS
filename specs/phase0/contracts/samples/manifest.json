@@ -1,0 +1,21 @@
+{
+  "$comment": "Contract sample expectations for scripts/validate-phase0.mjs",
+  "samples": [
+    {
+      "file": "01_delegate_popeye_to_stan.json",
+      "expectSchemaValid": true,
+      "expectSemanticDeny": false
+    },
+    {
+      "file": "02_worker_returns_structured_only.json",
+      "expectSchemaValid": true,
+      "expectSemanticDeny": false
+    },
+    {
+      "file": "03_denied_worker_present_to_user.json",
+      "expectSchemaValid": true,
+      "expectSemanticDeny": true,
+      "denyReason": "non-popeye must not emit present_to_user"
+    }
+  ]
+}

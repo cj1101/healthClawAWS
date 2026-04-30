@@ -1,0 +1,24 @@
+# Secrets & local auth
+*.pem
+.env
+.env.*
+
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Vendor health-coach artifacts (never commit OAuth / payloads)
+vendor/openclaw-health/skills/health-coach/tokens/
+vendor/openclaw-health/skills/health-coach/data/raw/
+vendor/openclaw-health/skills/health-coach/data/health_store.json
+vendor/openclaw-health/skills/health-coach/**/*.pyc
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/

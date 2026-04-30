@@ -1,0 +1,60 @@
+{
+  "_comment": "Configurable thresholds for the health platform. Edit these values to tune behavior without touching code.",
+
+  "injury_risk": {
+    "allostatic_load_high":        7.0,
+    "allostatic_load_critical":    8.5,
+    "calorie_deficit_danger_kcal": 600,
+    "calorie_deficit_days":        3,
+    "recovery_score_low":          35,
+    "recovery_score_critical":     25,
+    "strain_high":                 16.0,
+    "strain_critical":             19.0,
+    "consecutive_poor_sleep_days": 3,
+    "poor_sleep_threshold_hours":  6.0,
+    "hard_sleep_low_hours":        5.0,
+    "hard_sleep_high_hours":       11.0,
+    "hard_rhr_spike_bpm":          10.0,
+    "hrv_drop_pct":                20,
+    "qualitative_injury_keywords": [
+      "tweaky", "tweak", "pain", "hurt", "sore", "ache", "stiff",
+      "tight", "strain", "sprain", "inflamed", "swollen", "bruised"
+    ],
+    "qualitative_fatigue_keywords": [
+      "exhausted", "wiped", "drained", "tired", "fatigued", "depleted",
+      "sluggish", "flat", "heavy"
+    ],
+    "risk_score_thresholds": {
+      "low":      3.0,
+      "moderate": 5.5,
+      "high":     7.5
+    }
+  },
+
+  "nutrient_timing": {
+    "high_fat_pre_sleep_threshold_g":  25,
+    "high_fat_pre_sleep_window_hours":  3,
+    "late_meal_cutoff_hour":           21,
+    "poor_sleep_correlation_pct":      65,
+    "protein_daily_min_g":            120,
+    "protein_performance_target_g":   160,
+    "carb_refuel_threshold_g":        150,
+    "calorie_floor_kcal":            1800
+  },
+
+  "allostatic_load": {
+    "event_weight":       0.6,
+    "busy_hours_weight":  0.8,
+    "due_today_weight":   0.5,
+    "overdue_weight":     0.7,
+    "max_raw":          100.0,
+    "scale_to":          10.0
+  },
+
+  "manager": {
+    "check_in_interval_days":     1,
+    "goal_review_interval_days": 14,
+    "green_streak_notify_days":   3,
+    "morning_synthesis_hour":     7
+  }
+}

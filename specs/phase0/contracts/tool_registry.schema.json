@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nemoclaw.local/schemas/phase0/tool_registry.schema.json",
+  "title": "NemoclawToolRegistry",
+  "type": "object",
+  "required": ["version", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ToolDef" }
+    }
+  },
+  "$defs": {
+    "RiskTier": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "ToolDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_id",
+        "summary",
+        "owner_agent",
+        "visibility",
+        "risk_tier"
+      ],
+      "properties": {
+        "tool_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]+$"
+        },
+        "summary": { "type": "string", "minLength": 1 },
+        "owner_agent": {
+          "type": "string",
+          "enum": ["popeye", "stan", "dick", "joy", "data-entry", "debug", "system"]
+        },
+        "visibility": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": ["popeye", "stan", "dick", "joy", "data-entry", "debug", "system"]
+          }
+        },
+        "risk_tier": { "$ref": "#/$defs/RiskTier" },
+        "requires_disclaimer_template_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^JOY_[A-Z0-9_]+$" },
+          "description": "If output may reach user via Popeye, list template ids that must merge into Joy-packaged facts."
+        },
+        "audit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "log_payload_redaction": {
+              "type": "string",
+              "enum": ["none", "phi_redacted", "hash_only"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

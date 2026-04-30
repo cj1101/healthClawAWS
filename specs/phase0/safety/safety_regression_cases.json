@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "global_blocked_regex": [
+    "\\byou\\s+have\\s+diagnosed\\b",
+    "\\byou\\s+are\\s+diagnosed\\b",
+    "\\bthis\\s+confirms(?:\\s+that)?\\s+you\\s+have\\b",
+    "\\bdefinit(?:ive)?e\\s+diagnosis\\b"
+  ],
+  "cases": [
+    {
+      "id": "watch_includes_watch_disclaimer_marker",
+      "tier": "watch",
+      "syntheticJoyOutputForUserPackaging": "Notice: readiness markers shifted versus baseline. Monitor hydration and pacing. [[JOY_WATCH_V1]]",
+      "expect_template_markers_present": ["[[JOY_WATCH_V1]]"],
+      "extra_blocked_regex": [],
+      "expect_failure": false
+    },
+    {
+      "id": "urgent_includes_urgent_disclaimer_marker",
+      "tier": "urgent",
+      "syntheticJoyOutputForUserPackaging": "Multiple vitals breached hard thresholds concurrently (wearable-estimated). [[JOY_URGENT_V1]] Seek care if experiencing severe symptoms.",
+      "expect_template_markers_present": ["[[JOY_URGENT_V1]]"],
+      "extra_blocked_regex": [],
+      "expect_failure": false
+    },
+    {
+      "id": "fail_missing_watch_disclaimer",
+      "tier": "watch",
+      "syntheticJoyOutputForUserPackaging": "HR trend looks different than last week.",
+      "expect_template_markers_present": ["[[JOY_WATCH_V1]]"],
+      "extra_blocked_regex": [],
+      "expect_failure": true
+    },
+    {
+      "id": "fail_diagnostic_language",
+      "tier": "info",
+      "syntheticJoyOutputForUserPackaging": "[[JOY_INFO_V1]] This confirms that you have atrial fibrillation based on wearable data.",
+      "expect_template_markers_present": ["[[JOY_INFO_V1]]"],
+      "extra_blocked_regex": [],
+      "expect_failure": true
+    }
+  ]
+}

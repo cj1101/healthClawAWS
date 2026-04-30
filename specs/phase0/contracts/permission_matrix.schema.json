@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nemoclaw.local/schemas/phase0/permission_matrix.schema.json",
+  "title": "NemoclawPermissionMatrix",
+  "type": "object",
+  "required": ["version", "agents", "permissions"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "agents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": ["popeye", "stan", "dick", "joy", "data-entry", "debug"]
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["permission_id", "grants"],
+        "properties": {
+          "permission_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "description": { "type": "string" },
+          "grants": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "popeye": { "$ref": "#/$defs/Grant" },
+              "stan": { "$ref": "#/$defs/Grant" },
+              "dick": { "$ref": "#/$defs/Grant" },
+              "joy": { "$ref": "#/$defs/Grant" },
+              "data-entry": { "$ref": "#/$defs/Grant" },
+              "debug": { "$ref": "#/$defs/Grant" }
+            },
+            "minProperties": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Grant": {
+      "type": "string",
+      "enum": ["allow", "deny", "approve_required"]
+    }
+  }
+}

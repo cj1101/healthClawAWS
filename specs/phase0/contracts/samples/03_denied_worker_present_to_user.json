@@ -1,0 +1,12 @@
+{
+  "task_id": "task_denied_worker_direct_user",
+  "source_agent": "joy",
+  "target_agent": "joy",
+  "intent": "invalid_direct_user_demo",
+  "risk": "high",
+  "payload": { "signals": {} },
+  "citations": [],
+  "actions": [{ "type": "present_to_user", "detail": { "preview": "(invalid)" } }],
+  "policy_decision": "blocked",
+  "ts": "2026-04-30T12:05:00Z"
+}

@@ -1,0 +1,252 @@
+{
+    "version":  1,
+    "missionStatement":  "Maximizing Charles\u0027 Quality of Life",
+    "routingMode":  "hybrid",
+    "fallbackAgentId":  "koda",
+    "teams":  [
+                  {
+                      "id":  "executive",
+                      "name":  "Executive Team",
+                      "enabled":  true,
+                      "domain":  "coordination",
+                      "managerAgentId":  "koda",
+                      "workerAgentIds":  [
+
+                                         ],
+                      "intentTags":  [
+                                         "coordination",
+                                         "scheduling",
+                                         "memory",
+                                         "delegation",
+                                         "admin"
+                                     ],
+                      "taskKinds":  [
+                                        "coordination",
+                                        "assistant_admin",
+                                        "cross_team_request"
+                                    ],
+                      "priorityRules":  [
+                                            "koda-is-primary-contact",
+                                            "delegate-when-specialized"
+                                        ]
+                  },
+                  {
+                      "id":  "coding",
+                      "name":  "Coding Team",
+                      "enabled":  true,
+                      "domain":  "engineering",
+                      "managerAgentId":  "cody",
+                      "workerAgentIds":  [
+                                             "sweeny",
+                                             "anthony",
+                                             "derek",
+                                             "tilly"
+                                         ],
+                      "intentTags":  [
+                                         "coding",
+                                         "infra",
+                                         "automation",
+                                         "self_healing",
+                                         "database",
+                                         "math"
+                                     ],
+                      "taskKinds":  [
+                                        "implementation",
+                                        "debugging",
+                                        "refactor",
+                                        "qa_validation",
+                                        "data_pipeline"
+                                    ],
+                      "priorityRules":  [
+                                            "route-engineering-to-cody",
+                                            "cody-subdelegates-to-specialist"
+                                        ]
+                  },
+                  {
+                      "id":  "health",
+                      "name":  "Health Team",
+                      "enabled":  true,
+                      "domain":  "wellbeing",
+                      "managerAgentId":  "popeye",
+                      "workerAgentIds":  [
+                                             "stan",
+                                             "dick",
+                                             "joy"
+                                         ],
+                      "intentTags":  [
+                                         "health",
+                                         "nutrition",
+                                         "fitness",
+                                         "wellbeing",
+                                         "recovery"
+                                     ],
+                      "taskKinds":  [
+                                        "health_analysis",
+                                        "nutrition_guidance",
+                                        "training_plan",
+                                        "checkin"
+                                    ],
+                      "priorityRules":  [
+                                            "route-health-to-popeye",
+                                            "popeye-subdelegates-to-specialist"
+                                        ]
+                  }
+              ],
+    "agents":  [
+                   {
+                       "id":  "koda",
+                       "name":  "Koda",
+                       "title":  "Chief of Staff",
+                       "enabled":  true,
+                       "isPrimaryContact":  true,
+                       "teamId":  "executive",
+                       "modelPreference":  "gemma31b",
+                       "capabilities":  [
+                                            "orchestration",
+                                            "communication",
+                                            "delegation",
+                                            "fallback_execution",
+                                            "memory_stewardship"
+                                        ],
+                       "modelFallbacks":  [
+                                              "minimax25",
+                                              "gemma31b"
+                                          ]
+                   },
+                   {
+                       "id":  "cody",
+                       "name":  "Cody",
+                       "title":  "Orchestration Lead",
+                       "enabled":  true,
+                       "teamId":  "coding",
+                       "modelPreference":  "gemma31b",
+                       "capabilities":  [
+                                            "engineering_routing",
+                                            "task_breakdown",
+                                            "cross_worker_coordination"
+                                        ]
+                   },
+                   {
+                       "id":  "sweeny",
+                       "name":  "Sweeny",
+                       "title":  "Core Software Architect",
+                       "enabled":  true,
+                       "teamId":  "coding",
+                       "modelPreference":  "minimax27",
+                       "capabilities":  [
+                                            "architecture",
+                                            "system_design",
+                                            "technical_strategy"
+                                        ],
+                       "modelFallbacks":  [
+                                              "minimax27"
+                                          ]
+                   },
+                   {
+                       "id":  "anthony",
+                       "name":  "Anthony",
+                       "title":  "Diagnostic Specialist",
+                       "enabled":  true,
+                       "teamId":  "coding",
+                       "modelPreference":  "kimi25",
+                       "capabilities":  [
+                                            "diagnostics",
+                                            "incident_triage",
+                                            "root_cause_analysis"
+                                        ]
+                   },
+                   {
+                       "id":  "derek",
+                       "name":  "Derek",
+                       "title":  "Data Pipeline & Structuring Engineer",
+                       "enabled":  true,
+                       "teamId":  "coding",
+                       "modelPreference":  "gemini_flash_lite",
+                       "capabilities":  [
+                                            "data_pipeline",
+                                            "schema_design",
+                                            "data_transformations"
+                                        ]
+                   },
+                   {
+                       "id":  "tilly",
+                       "name":  "Tilly",
+                       "title":  "Quality Assurance (QA) Lead",
+                       "enabled":  true,
+                       "teamId":  "coding",
+                       "modelPreference":  "qwen35_flash",
+                       "capabilities":  [
+                                            "test_strategy",
+                                            "verification",
+                                            "quality_gates"
+                                        ]
+                   },
+                   {
+                       "id":  "popeye",
+                       "name":  "Popeye",
+                       "title":  "Health Manager",
+                       "enabled":  true,
+                       "teamId":  "health",
+                       "modelPreference":  "gemma31b",
+                       "capabilities":  [
+                                            "health_orchestration",
+                                            "human_activity_ingestion",
+                                            "results_synthesis",
+                                            "hierarchical_routing"
+                                        ]
+                   },
+                   {
+                       "id":  "stan",
+                       "name":  "Stan",
+                       "title":  "Nutritionist",
+                       "enabled":  true,
+                       "teamId":  "health",
+                       "modelPreference":  "gemma31b",
+                       "capabilities":  [
+                                            "nutrition_analysis",
+                                            "baseline_trend_monitoring",
+                                            "threshold_alerting"
+                                        ],
+                       "modelFallbacks":  [
+                                              "minimax25",
+                                              "gemma31b"
+                                          ]
+                   },
+                   {
+                       "id":  "dick",
+                       "name":  "Dick",
+                       "title":  "Trainer",
+                       "enabled":  true,
+                       "teamId":  "health",
+                       "modelPreference":  "gemma31b",
+                       "capabilities":  [
+                                            "training_plan_generation",
+                                            "workout_programming",
+                                            "activity_feedback"
+                                        ],
+                       "modelFallbacks":  [
+                                              "minimax25",
+                                              "gemma31b"
+                                          ]
+                   },
+                   {
+                       "id":  "joy",
+                       "name":  "Joy",
+                       "title":  "Nurse",
+                       "enabled":  true,
+                       "teamId":  "health",
+                       "modelPreference":  "gemma31b",
+                       "capabilities":  [
+                                            "vitals_monitoring",
+                                            "risk_flagging",
+                                            "clinical_followup_questions"
+                                        ],
+                       "modelFallbacks":  [
+                                              "minimax25",
+                                              "gemma31b"
+                                          ]
+                   }
+               ]
+}
+
+

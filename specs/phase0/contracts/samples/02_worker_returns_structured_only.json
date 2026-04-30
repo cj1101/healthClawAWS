@@ -1,0 +1,15 @@
+{
+  "task_id": "task_20260430_reply_stan_to_popeye",
+  "source_agent": "stan",
+  "target_agent": "popeye",
+  "intent": "nutrition_analysis_response",
+  "confidence": 0.79,
+  "risk": "low",
+  "payload": {
+    "alerts": ["baseline deviation >30% calories vs 7d"],
+    "flags_count": 2
+  },
+  "citations": [{ "ref": "meal_records:seven_day_window" }],
+  "actions": [{ "type": "return_to_manager", "detail": {} }],
+  "ts": "2026-04-30T12:00:03Z"
+}

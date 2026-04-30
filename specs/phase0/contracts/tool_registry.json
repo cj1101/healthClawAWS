@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "tool_id": "health.sync_whoop_daily",
+      "summary": "Fetch and persist WHOOP day/sleep payloads into local health store.",
+      "owner_agent": "data-entry",
+      "visibility": ["popeye", "stan", "dick", "joy", "data-entry", "debug"],
+      "risk_tier": "medium",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.analyze_meal_patterns",
+      "summary": "Compute nutrition timing deviations vs baseline (Stan).",
+      "owner_agent": "stan",
+      "visibility": ["popeye", "stan", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.build_training_plan",
+      "summary": "Propose modality/intensity prescriptions from readiness context (Dick).",
+      "owner_agent": "dick",
+      "visibility": ["popeye", "dick", "debug"],
+      "risk_tier": "medium",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.assess_recovery_risk_signals",
+      "summary": "Score recovery / vitals divergence for watch-tier surfacing (Joy).",
+      "owner_agent": "joy",
+      "visibility": ["popeye", "joy", "debug"],
+      "risk_tier": "high",
+      "requires_disclaimer_template_ids": ["JOY_INFO_V1"]
+    },
+    {
+      "tool_id": "health.llm_summarize_internal",
+      "summary": "Popeye merges worker structured outputs into user-facing prose.",
+      "owner_agent": "popeye",
+      "visibility": ["popeye", "stan", "dick", "joy", "data-entry", "debug"],
+      "risk_tier": "medium",
+      "requires_disclaimer_template_ids": []
+    },
+    {
+      "tool_id": "health.struct_log_event",
+      "summary": "Append orchestration/event row compatible with Nemoclaw event envelope.",
+      "owner_agent": "debug",
+      "visibility": ["popeye", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "hash_only" }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "_comment": "Duplicate file name for blueprint compatibility — content mirrors joy_templates.json",
+  "version": 1,
+  "templates": [
+    {
+      "id": "JOY_INFO_V1",
+      "title": "General monitoring",
+      "body": "These signals come from your wearable and logs. They are not a medical diagnosis. Use them as context alongside how you feel day to day.",
+      "presence_markers": ["[[JOY_INFO_V1]]"]
+    },
+    {
+      "id": "JOY_WATCH_V1",
+      "title": "Watch-tier disclaimer",
+      "body": "Not medical advice — patterns changed enough to monitor closely. If symptoms worsen or you feel unwell, contact a clinician. [[JOY_WATCH_V1]]",
+      "presence_markers": ["[[JOY_WATCH_V1]]"]
+    },
+    {
+      "id": "JOY_URGENT_V1",
+      "title": "Urgent-tier disclaimer",
+      "body": "This is urgent safety context based on thresholds, not a diagnosis. Seek immediate medical care / emergency services if you have severe symptoms, chest pain, trouble breathing, fainting, or other emergencies. [[JOY_URGENT_V1]]",
+      "presence_markers": ["[[JOY_URGENT_V1]]"]
+    }
+  ]
+}

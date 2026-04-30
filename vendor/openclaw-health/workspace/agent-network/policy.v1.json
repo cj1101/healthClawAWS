@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "mode": "policy-based-auto",
+  "defaultDecision": "approvalRequired",
+  "riskTiers": {
+    "lowRisk": {
+      "description": "Safe internal actions that can be auto-executed.",
+      "decision": "auto"
+    },
+    "approvalRequired": {
+      "description": "Potentially impactful actions requiring Charles approval.",
+      "decision": "needs_approval"
+    },
+    "blocked": {
+      "description": "Actions that should never execute automatically.",
+      "decision": "blocked"
+    }
+  },
+  "rules": [
+    {
+      "id": "coding-internal-low-risk",
+      "enabled": true,
+      "teamId": "coding",
+      "actionTypes": [
+        "read_files",
+        "analyze_logs",
+        "write_internal_docs",
+        "run_local_tests",
+        "refactor_internal_code",
+        "update_dashboard_ui"
+      ],
+      "riskTier": "lowRisk"
+    },
+    {
+      "id": "health-analysis-low-risk",
+      "enabled": true,
+      "teamId": "health",
+      "actionTypes": [
+        "health_data_analysis",
+        "nutrition_analysis",
+        "training_analysis",
+        "status_report"
+      ],
+      "riskTier": "lowRisk"
+    },
+    {
+      "id": "external-messaging-approval",
+      "enabled": true,
+      "teamId": "*",
+      "actionTypes": [
+        "send_message",
+        "send_email",
+        "notify_external"
+      ],
+      "riskTier": "approvalRequired"
+    },
+    {
+      "id": "credential-access-approval",
+      "enabled": true,
+      "teamId": "*",
+      "actionTypes": [
+        "credential_access_change",
+        "secret_rotation",
+        "auth_profile_update"
+      ],
+      "riskTier": "approvalRequired"
+    },
+    {
+      "id": "irreversible-approval",
+      "enabled": true,
+      "teamId": "*",
+      "actionTypes": [
+        "destructive_command",
+        "delete_data",
+        "financial_action",
+        "medical_recommendation_high_impact"
+      ],
+      "riskTier": "approvalRequired"
+    },
+    {
+      "id": "forbidden-sensitive-actions",
+      "enabled": true,
+      "teamId": "*",
+      "actionTypes": [
+        "exfiltrate_secrets",
+        "bypass_safety_policy",
+        "impersonation"
+      ],
+      "riskTier": "blocked"
+    }
+  ],
+  "fallbackBehavior": {
+    "whenManagerDisabled": "koda_fallback",
+    "whenTeamDisabled": "koda_fallback",
+    "whenNoRuleMatches": "approval_required"
+  }
+}

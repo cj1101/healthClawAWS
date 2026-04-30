@@ -1,0 +1,13 @@
+{
+  "name": "healthclaw-aws",
+  "private": true,
+  "type": "module",
+  "description": "Nemoclaw Health Phase 0 contracts + validators",
+  "scripts": {
+    "validate:phase0": "node scripts/validate-phase0.mjs"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  }
+}

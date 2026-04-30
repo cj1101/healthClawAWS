@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "updatedAt": 1774896336533,
+  "agents": {
+    "koda": {
+      "state": "on",
+      "enabledBy": "policy",
+      "lastActiveAt": 1774896336516
+    },
+    "cody": {
+      "state": "on",
+      "enabledBy": "policy",
+      "lastActiveAt": 1774896336516
+    },
+    "sweeny": {
+      "state": "off"
+    },
+    "anthony": {
+      "state": "off"
+    },
+    "derek": {
+      "state": "off"
+    },
+    "tilly": {
+      "state": "off"
+    },
+    "popeye": {
+      "state": "on",
+      "enabledBy": "policy",
+      "lastActiveAt": 1774896336516
+    },
+    "stan": {
+      "state": "off"
+    },
+    "dick": {
+      "state": "off"
+    },
+    "joy": {
+      "state": "off"
+    }
+  }
+}

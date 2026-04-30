@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "agents": ["popeye", "stan", "dick", "joy", "data-entry", "debug"],
+  "permissions": [
+    {
+      "permission_id": "user_visible_final_output",
+      "description": "Synthesize or send final prose to the end user.",
+      "grants": {
+        "popeye": "allow",
+        "stan": "deny",
+        "dick": "deny",
+        "joy": "deny",
+        "data-entry": "deny",
+        "debug": "deny"
+      }
+    },
+    {
+      "permission_id": "delegate_to_health_worker",
+      "description": "Issue delegation events toward Stan, Dick, or Joy.",
+      "grants": {
+        "popeye": "allow",
+        "stan": "deny",
+        "dick": "deny",
+        "joy": "deny",
+        "data-entry": "deny",
+        "debug": "approve_required"
+      }
+    },
+    {
+      "permission_id": "network_egress_default",
+      "description": "Call external APIs (WHOOP, weather, LLM gateways, etc.).",
+      "grants": {
+        "popeye": "approve_required",
+        "stan": "approve_required",
+        "dick": "approve_required",
+        "joy": "approve_required",
+        "data-entry": "approve_required",
+        "debug": "deny"
+      }
+    },
+    {
+      "permission_id": "read_health_logging_store",
+      "description": "Read structured logs / ingest store / DB rows for health telemetry.",
+      "grants": {
+        "popeye": "allow",
+        "stan": "allow",
+        "dick": "allow",
+        "joy": "allow",
+        "data-entry": "allow",
+        "debug": "approve_required"
+      }
+    },
+    {
+      "permission_id": "write_health_logging_store",
+      "description": "Append structured ingest or derived computations.",
+      "grants": {
+        "popeye": "allow",
+        "stan": "deny",
+        "dick": "deny",
+        "joy": "deny",
+        "data-entry": "allow",
+        "debug": "deny"
+      }
+    },
+    {
+      "permission_id": "emit_internal_trace_only",
+      "description": "Write diagnostic events with no PHI in payload (redacted).",
+      "grants": {
+        "popeye": "allow",
+        "stan": "allow",
+        "dick": "allow",
+        "joy": "allow",
+        "data-entry": "allow",
+        "debug": "allow"
+      }
+    },
+    {
+      "permission_id": "handle_phi",
+      "description": "Persist or propagate personally identifiable health data.",
+      "grants": {
+        "popeye": "approve_required",
+        "stan": "approve_required",
+        "dick": "approve_required",
+        "joy": "approve_required",
+        "data-entry": "approve_required",
+        "debug": "deny"
+      }
+    }
+  ]
+}

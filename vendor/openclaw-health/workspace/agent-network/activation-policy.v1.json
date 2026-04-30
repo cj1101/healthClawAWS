@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "rolloutScope": "all-teams",
+  "startupState": {
+    "managersOn": true,
+    "workersOn": false,
+    "healthTeamMode": "enabled"
+  },
+  "workerLifecycle": {
+    "mode": "warm-pool-auto",
+    "idleShutdownMs": 120000,
+    "scaleUpQueueDepth": 3
+  },
+  "wakePolicy": {
+    "allowedSignals": [
+      "user_request",
+      "scheduled_cron",
+      "manager_delegation",
+      "qa_feedback_loop",
+      "retry_policy"
+    ],
+    "retry": {
+      "strategy": "fixed",
+      "intervalMs": 30000,
+      "maxRetries": 2
+    },
+    "offSwitchPrecedence": "allow-manager-override"
+  },
+  "costGuardrail": {
+    "mode": "per-task-cost-cap",
+    "defaultUsdCap": 0.2
+  },
+  "qaGate": {
+    "required": true,
+    "confidenceThreshold": 0.95,
+    "maxRepairLoops": 3,
+    "successHandoff": [
+      "cody",
+      "koda"
+    ]
+  },
+  "escalation": {
+    "macroIssue": "parallel-cody-sweeny",
+    "dbRouting": "cody-policy-engine",
+    "wakeFailure": "queue-and-retry-then-escalate"
+  }
+}
