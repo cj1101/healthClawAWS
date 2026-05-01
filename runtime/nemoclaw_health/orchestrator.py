@@ -16,6 +16,7 @@ from nemoclaw_health.db import (
     new_id,
 )
 from nemoclaw_health.events import UserVisibilityInvariantError, validate_orchestration_event
+from nemoclaw_health.image_subagent import describe_images_for_coaching
 from nemoclaw_health.openrouter_client import chat_completion, parse_llm_json_object
 from nemoclaw_health.settings import Settings
 
@@ -470,13 +471,52 @@ class HealthOrchestrator:
         self.db: Database = get_db(settings)
         self.artifact_log = settings.resolved_artifact_log()
 
-    def run_chat_turn(self, user_message: str) -> dict[str, Any]:
+    def _merge_vision_into_message(
+        self,
+        user_message: str,
+        *,
+        images: list[tuple[str, bytes]] | None,
+        conversation_context: list[dict[str, str]] | None,
+    ) -> str:
+        if not images:
+            return user_message
+        model_label = self.settings.openrouter_vision_model
         if self.settings.openrouter_api_key:
             try:
-                return self._run_llm_turn(user_message)
+                vision = describe_images_for_coaching(
+                    self.settings,
+                    user_text=user_message,
+                    images=images,
+                    conversation_context=conversation_context,
+                )
             except Exception:
-                return self._run_stub_turn(user_message)
-        return self._run_stub_turn(user_message)
+                vision = "[Image understanding failed; proceeding with user text only.]"
+        else:
+            vision = (
+                "[Images attached; vision skipped — OpenRouter API key not configured. "
+                "Describe images in text for full coaching.]"
+            )
+        caption = user_message.strip() or "(no text beyond images)"
+        return f"Image understanding ({model_label}):\n{vision}\n\nUser message:\n{caption}"
+
+    def run_chat_turn(
+        self,
+        user_message: str,
+        *,
+        images: list[tuple[str, bytes]] | None = None,
+        conversation_context: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        effective = self._merge_vision_into_message(
+            user_message,
+            images=images,
+            conversation_context=conversation_context,
+        )
+        if self.settings.openrouter_api_key:
+            try:
+                return self._run_llm_turn(effective)
+            except Exception:
+                return self._run_stub_turn(effective)
+        return self._run_stub_turn(effective)
 
     def _run_stub_turn(self, user_message: str) -> dict[str, Any]:
         root_task = new_id("task_")

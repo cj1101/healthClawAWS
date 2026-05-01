@@ -67,6 +67,10 @@
       <h2>Chat</h2>
       <form id="chatForm">
         <textarea id="chatMessage" rows="3" placeholder="Message to Popeye…"></textarea>
+        <label class="muted" style="display: block; margin-top: 0.5rem"
+          >Images (optional, up to 4)
+          <input type="file" id="chatImages" accept="image/*" multiple />
+        </label>
         <button type="submit">Send</button>
       </form>
       <pre id="chatOut" class="preview"></pre>

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from nemoclaw_health.auth_http import install_dashboard_auth
 from nemoclaw_health.connectors.apple_health import (
@@ -59,8 +61,70 @@ from nemoclaw_health.settings import Settings
 from nemoclaw_health.storage_catalog import build_storage_catalog
 
 
+_MAX_CHAT_IMAGES = 4
+_MAX_CHAT_IMAGE_BYTES = 6 * 1024 * 1024
+_MAX_CONTEXT_CHARS = 8000
+_MAX_CONTEXT_TURNS = 20
+_ALLOWED_CHAT_IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+
+
+class ChatImageIn(BaseModel):
+    mime_type: str = Field(..., min_length=3)
+    data_base64: str = Field(..., min_length=1)
+
+
+class ChatContextTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1)
+
+
 class ChatReq(BaseModel):
-    message: str = Field(..., min_length=1)
+    message: str = ""
+    images: list[ChatImageIn] = Field(default_factory=list)
+    conversation_context: list[ChatContextTurn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def message_or_images(self) -> ChatReq:
+        if not self.message.strip() and not self.images:
+            raise ValueError("Provide a non-empty message and/or at least one image.")
+        return self
+
+
+def _decode_chat_images(images: list[ChatImageIn]) -> list[tuple[str, bytes]]:
+    if len(images) > _MAX_CHAT_IMAGES:
+        raise ValueError(f"At most {_MAX_CHAT_IMAGES} images per request.")
+    out: list[tuple[str, bytes]] = []
+    for im in images:
+        mt = im.mime_type.strip().lower()
+        if mt not in _ALLOWED_CHAT_IMAGE_MIMES:
+            raise ValueError(f"Unsupported image MIME type: {im.mime_type!r}.")
+        try:
+            raw = base64.b64decode(im.data_base64, validate=True)
+        except binascii.Error as e:
+            raise ValueError("Invalid base64 in image payload.") from e
+        if len(raw) > _MAX_CHAT_IMAGE_BYTES:
+            raise ValueError(
+                f"Each image must be at most {_MAX_CHAT_IMAGE_BYTES // (1024 * 1024)} MiB."
+            )
+        out.append((mt, raw))
+    return out
+
+
+def _normalize_chat_context(turns: list[ChatContextTurn]) -> list[dict[str, str]] | None:
+    if not turns:
+        return None
+    sel = turns[-_MAX_CONTEXT_TURNS:]
+    picked: list[ChatContextTurn] = []
+    total = 0
+    for t in reversed(sel):
+        piece = len(t.content) + len(t.role) + 2
+        if total + piece > _MAX_CONTEXT_CHARS:
+            break
+        picked.insert(0, t)
+        total += piece
+    if not picked:
+        return None
+    return [{"role": x.role, "content": x.content} for x in picked]
 
 
 class DomainReq(BaseModel):
@@ -316,8 +380,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/v1/chat")
     def chat(req: ChatReq = Body(...), s: Settings = Depends(svc_settings)):
+        try:
+            decoded_images = _decode_chat_images(req.images) if req.images else []
+            ctx = _normalize_chat_context(req.conversation_context)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         orch = HealthOrchestrator(s)
-        return orch.run_chat_turn(req.message)
+        return orch.run_chat_turn(
+            req.message,
+            images=decoded_images if decoded_images else None,
+            conversation_context=ctx,
+        )
 
     @app.post("/v1/data/domain")
     def register_domain(req: DomainReq = Body(...), s: Settings = Depends(svc_settings)):

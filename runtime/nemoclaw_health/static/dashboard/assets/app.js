@@ -571,10 +571,36 @@ async function main() {
     }
   });
 
+  const readFileAsBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const s = String(r.result || "");
+        const i = s.indexOf(",");
+        resolve(i >= 0 ? s.slice(i + 1) : s);
+      };
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+
   $("chatForm")?.addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const msg = $("chatMessage").value;
-    const out = await api("v1/chat", { method: "POST", body: JSON.stringify({ message: msg }) });
+    const msg = ($("chatMessage")?.value || "").trim();
+    const input = $("chatImages");
+    const files = input?.files || [];
+    const images = [];
+    for (let i = 0; i < Math.min(files.length, 4); i += 1) {
+      const f = files[i];
+      const mime = (f.type || "image/jpeg").split(";")[0].trim();
+      const b64 = await readFileAsBase64(f);
+      images.push({ mime_type: mime, data_base64: b64 });
+    }
+    if (!msg && images.length === 0) {
+      $("chatOut").textContent = "Enter a message or attach at least one image.";
+      return;
+    }
+    const body = { message: msg, images };
+    const out = await api("v1/chat", { method: "POST", body: JSON.stringify(body) });
     $("chatOut").textContent = JSON.stringify(out, null, 2);
   });
 

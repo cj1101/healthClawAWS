@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_api_base: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "deepseek/deepseek-v4-pro"
+    # Used only when /v1/chat includes images (vision pass before Popeye).
+    openrouter_vision_model: str = "qwen/qwen3.6-35b-a3b"
 
     # Prefer unprefixed WHOOP_* (matches common WHOOP docs); NEMOWLAW_* kept for backward compatibility.
     whoop_client_id: str | None = Field(

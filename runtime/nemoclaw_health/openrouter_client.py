@@ -13,17 +13,19 @@ from nemoclaw_health.settings import Settings
 
 def chat_completion(
     settings: Settings,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     temperature: float = 0.25,
     timeout_s: float = 120.0,
+    model: str | None = None,
 ) -> str:
     key = settings.openrouter_api_key
     if not key:
         raise RuntimeError("OpenRouter API key is not configured")
     url = f"{settings.openrouter_api_base.rstrip('/')}/chat/completions"
+    model_id = model if model is not None else settings.openrouter_model
     payload = {
-        "model": settings.openrouter_model,
+        "model": model_id,
         "messages": messages,
         "temperature": temperature,
     }
