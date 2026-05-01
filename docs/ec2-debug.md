@@ -6,13 +6,13 @@ Canonical flow: **`GitHub ← → laptop ← → EC2`**. Prefer **committed** JS
 
 - Git
 - Node.js ≥ 18 (use [nvm](https://github.com/nvm-sh/nvm) on Ubuntu) for Phase 0 validators
-- SSH key with correct permissions locally (do **not** commit `.pem`; path on Windows is yours only):
+- SSH key with correct permissions locally (do **not** commit `.pem`; path on Windows is yours only). **Login user depends on the AMI:** Amazon Linux uses `ec2-user`; official Ubuntu AMIs use `ubuntu`.
 
 ```powershell
-ssh -i "C:\Users\charl\openclawKey.pem" ubuntu@ec2-44-200-84-118.compute-1.amazonaws.com
+ssh -i "C:\Users\charl\openclawKey.pem" ec2-user@54.80.131.225
 ```
 
-On Linux/macOS enforce key perms (`chmod 400 key.pem`) before SSH.
+On Linux/macOS enforce key perms (`chmod 400 key.pem`) before SSH. Replace the host with your instance’s **public IPv4** or **public DNS** when it changes.
 
 ### One-time EC2 checkout
 
@@ -103,6 +103,14 @@ Skip opening **443** on the instance if you prefer: run `cloudflared` with a tun
 | Health | `curl -sf http://127.0.0.1:8000/healthz` |
 | Manual WHOOP job | `./deploy/ec2/scripts/curl-job.sh "$(pwd)" /v1/jobs/whoop-sync` |
 | Manual prunes | `./deploy/ec2/scripts/prune-all.sh "$(pwd)"` |
+| Telegram bot logs | `journalctl -u nemoclaw-telegram-bot -f` (after `enable --now`) |
+
+**Telegram bot:** `setup-services.sh` installs `nemoclaw-telegram-bot.service` but does **not** enable it (avoids a restart loop without secrets). Add to `.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` (your numeric user id from [@userinfobot](https://t.me/userinfobot) or `/start` on the bot), and `NEMOWLAW_CHAT_BEARER_TOKEN` when `NEMOWLAW_DASHBOARD_PASSWORD` is set. Then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now nemoclaw-telegram-bot
+```
 
 Timers: **WHOOP** roughly every 6 hours (`02,08,14,20`); **prune** daily at **03:30** (raw-event + delegation). Adjust in `deploy/ec2/systemd/*.timer` then `sudo systemctl daemon-reload` + restart the timer.
 
@@ -123,6 +131,7 @@ Large `export.xml` inside the ZIP can take many minutes to ingest. Site template
 ### Rollback
 
 ```bash
+sudo systemctl disable --now nemoclaw-telegram-bot.service
 sudo systemctl disable --now nemoclaw-whoop-sync.timer nemoclaw-prune.timer
 sudo systemctl disable --now nemoclaw-health
 sudo rm /etc/nginx/sites-enabled/nemoclaw-health

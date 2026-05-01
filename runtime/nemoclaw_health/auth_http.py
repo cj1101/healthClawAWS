@@ -53,6 +53,23 @@ def install_dashboard_auth(app: Any, settings: Settings) -> None:
                     and secrets.compare_digest(parts[1].strip(), settings.job_token.strip())
                 ):
                     return await call_next(request)
+            if (
+                p == "/v1/chat"
+                and request.method == "POST"
+                and settings.chat_bearer_token
+                and settings.chat_bearer_token.strip()
+            ):
+                raw = request.headers.get("authorization") or ""
+                parts = raw.split(None, 1)
+                if (
+                    len(parts) == 2
+                    and parts[0].lower() == "bearer"
+                    and secrets.compare_digest(
+                        parts[1].strip(),
+                        settings.chat_bearer_token.strip(),
+                    )
+                ):
+                    return await call_next(request)
             if p.startswith("/v1/"):
                 sess = request.scope.get("session")
                 if not isinstance(sess, dict) or not sess.get("authenticated"):

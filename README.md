@@ -35,7 +35,11 @@ cd runtime
 PYTHONPATH=. uvicorn nemoclaw_health.app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000/` for the dashboard (static UI). Set `NEMOWLAW_DASHBOARD_PASSWORD` to require sign-in for all `/v1/*` routes except `GET /healthz`, `POST /v1/auth/login`, `GET /v1/connectors/whoop/callback`, and **`POST /v1/jobs/*` when `Authorization: Bearer <NEMOWLAW_JOB_TOKEN>` matches** (for systemd / cron). Optional `NEMOWLAW_SESSION_SECRET` overrides the derived session signing key. Example EC2 env: [`deploy/ec2/ec2.env.example`](deploy/ec2/ec2.env.example).
+Open `http://localhost:8000/` for the dashboard (static UI). Set `NEMOWLAW_DASHBOARD_PASSWORD` to require sign-in for all `/v1/*` routes except `GET /healthz`, `POST /v1/auth/login`, `GET /v1/connectors/whoop/callback`, **`POST /v1/jobs/*` when `Authorization: Bearer <NEMOWLAW_JOB_TOKEN>` matches** (for systemd / cron), and **`POST /v1/chat` when `Authorization: Bearer <NEMOWLAW_CHAT_BEARER_TOKEN>` matches** (for the optional Telegram bot). Optional `NEMOWLAW_SESSION_SECRET` overrides the derived session signing key. Example EC2 env: [`deploy/ec2/ec2.env.example`](deploy/ec2/ec2.env.example).
+
+### Telegram bot (EC2, long polling)
+
+[`runtime/nemoclaw_health/telegram_bot.py`](runtime/nemoclaw_health/telegram_bot.py) forwards allowed users’ messages to `POST /v1/chat` on loopback (default `http://127.0.0.1:8000`). Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS`, and the same `NEMOWLAW_CHAT_BEARER_TOKEN` as the API when the dashboard password is enabled. Run: `cd runtime && python -m nemoclaw_health.telegram_bot`. On Wave D, [`deploy/ec2/systemd/nemoclaw-telegram-bot.service.in`](deploy/ec2/systemd/nemoclaw-telegram-bot.service.in) is installed by [`deploy/ec2/setup-services.sh`](deploy/ec2/setup-services.sh); enable it after secrets are in `.env` (see [`docs/ec2-debug.md`](docs/ec2-debug.md)). **Do not commit BotFather tokens**; if a token is ever pasted into chat or git, revoke it with [@BotFather](https://t.me/BotFather) and create a new one.
 
 | Area | Highlights |
 |------|------------|
