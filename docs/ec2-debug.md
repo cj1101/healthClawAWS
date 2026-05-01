@@ -47,7 +47,7 @@ python health_coach.py --help
 
 1. **`validate:phase0` first** — fails fast when contracts regress (schemas, permission matrix completeness, Joy regression JSON).
 2. **Logs** — if you integrate with OpenClaw’s `workflow-events.jsonl`-style drains in later phases, `tail -f` the configured path; Phase 0 is file-based only.
-3. **Secrets on EC2** — keep `.env` and OAuth tokens outside git (see `.gitignore`); copy via `scp`/SSM, not pasted into repos.
+3. **Secrets on EC2** — keep `.env` and OAuth tokens outside git (see `.gitignore`); copy via `scp`/SSM, not pasted into repos. **`scp` must run from your laptop** (the `-i` path is a local path to your `.pem`); if you are already SSH’d into EC2, edit `~/healthClaw/.env` on the instance instead. **`TELEGRAM_ALLOWED_USER_IDS`** must be your **numeric** Telegram user id (e.g. from [@userinfobot](https://t.me/userinfobot)), not an @username. **Optional — AWS Secrets Manager:** upload the raw `.env` with [`deploy/ec2/scripts/upload-env-to-secrets-manager.sh`](deploy/ec2/scripts/upload-env-to-secrets-manager.sh) (`AWS_REGION`, `AWS_SECRETS_MANAGER_SECRET_ID`, path to `.env`). Grant the instance role `secretsmanager:GetSecretValue`, then fetch into `~/healthClaw/.env` per the script header and restart services.
 
 See also [`docs/VENDOR_ENTRYPOINTS.md`](VENDOR_ENTRYPOINTS.md).
 

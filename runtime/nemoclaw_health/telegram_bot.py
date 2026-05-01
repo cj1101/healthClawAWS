@@ -26,14 +26,23 @@ _CHUNK = 3800
 
 
 def _allowed_ids() -> frozenset[int]:
+    """Parse TELEGRAM_ALLOWED_USER_IDS (comma-separated). Each entry must be a numeric user id.
+
+    A leading ``@`` is stripped so ``@7522615345`` works. Telegram @usernames are not supported.
+    """
     raw = os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "").strip()
     if not raw:
         return frozenset()
     out: set[int] = set()
     for part in raw.split(","):
-        part = part.strip()
+        part = part.strip().removeprefix("@")
         if not part:
             continue
+        if not part.isdigit():
+            raise ValueError(
+                "TELEGRAM_ALLOWED_USER_IDS must be numeric Telegram user ids (see @userinfobot). "
+                f"Invalid entry: {part!r} — usernames like @cjs1101 are not supported.",
+            )
         out.add(int(part))
     return frozenset(out)
 
@@ -129,7 +138,12 @@ def main() -> None:
         logger.error("Set TELEGRAM_BOT_TOKEN")
         sys.exit(2)
 
-    allowed = _allowed_ids()
+    try:
+        allowed = _allowed_ids()
+    except ValueError as e:
+        logger.error("%s", e)
+        sys.exit(2)
+
     if not allowed:
         logger.error("Set TELEGRAM_ALLOWED_USER_IDS (comma-separated integers, e.g. from @userinfobot)")
         sys.exit(2)
