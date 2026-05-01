@@ -76,7 +76,7 @@ Configure secrets:
 ```bash
 cp deploy/ec2/ec2.env.example .env
 chmod 600 .env
-# edit .env — set NEMOWLAW_DASHBOARD_PASSWORD, NEMOWLAW_JOB_TOKEN, WHOOP + OpenRouter vars
+# edit .env — set NEMOWLAW_DASHBOARD_PASSWORD, NEMOWLAW_JOB_TOKEN, WHOOP_CLIENT_ID/SECRET + OpenRouter vars
 sudo systemctl restart nemoclaw-health
 ```
 

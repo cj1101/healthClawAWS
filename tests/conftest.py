@@ -10,14 +10,13 @@ def iso_test_settings(tmp_path):
     reset_db_singleton()
     data = tmp_path / "nemodata"
     data.mkdir(parents=True, exist_ok=True)
-    s = Settings(
+    # model_construct: do not merge os.environ / .env so WHOOP_* in a dev .env
+    # cannot override explicit Nones (pydantic-settings env wins over __init__ kwargs).
+    s = Settings.model_construct(
         data_dir=data,
         sqlite_path=data / "t.sqlite",
         artifact_log=data / "orchestration.jsonl",
         raw_event_retention_days=90,
-        # Explicitly clear production credentials so tests always run in
-        # deterministic stub mode with no auth wall, and WHOOP tests can
-        # assert on the "not configured" code path.
         dashboard_password=None,
         session_secret=None,
         job_token=None,

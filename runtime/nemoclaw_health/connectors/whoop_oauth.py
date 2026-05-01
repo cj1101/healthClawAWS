@@ -54,10 +54,56 @@ def callback_url_from_request(request: Request) -> str:
     return f"{base}/v1/connectors/whoop/callback"
 
 
+def resolve_whoop_redirect_uri(settings: Settings, request: Request) -> tuple[str, str]:
+    """Pick redirect_uri for browser OAuth: env override, else request-derived.
+
+    Returns ``(redirect_uri, provenance)`` where provenance is one of
+    ``\"env\"``, ``\"derived\"``, or ``\"ignored_placeholder_env\"`` when
+    ``NEMOWLAW_WHOOP_REDIRECT_URI`` is still the copy-paste placeholder
+    from ``ec2.env.example`` (hostname ``your_domain``), which WHOOP will
+    reject — we fall back to the same origin as the Authorize request.
+    """
+    raw = (settings.whoop_redirect_uri or "").strip()
+    derived = callback_url_from_request(request)
+    if not raw:
+        return derived, "derived"
+    try:
+        host = (urllib.parse.urlparse(raw).hostname or "").lower()
+    except ValueError:
+        return derived, "derived"
+    if host == "your_domain":
+        return derived, "ignored_placeholder_env"
+    return raw, "env"
+
+
+def whoop_authorize_dashboard_hint(redirect_uri: str) -> str:
+    """User-facing reminder: WHOOP matches redirect_uri exactly to dashboard entries."""
+    exact = (
+        "Copy redirect_uri below into your WHOOP app’s Redirect URLs "
+        "(developer-dashboard.whoop.com) — the value must match exactly, including scheme and path."
+    )
+    try:
+        p = urllib.parse.urlparse((redirect_uri or "").strip())
+    except ValueError:
+        return exact
+    host = (p.hostname or "").lower()
+    if p.scheme == "http" and host in ("localhost", "127.0.0.1"):
+        return (
+            exact
+            + " WHOOP’s OAuth examples use https:// or whoop://; if the dashboard refuses this http:// URL, "
+            "use HTTPS in front of this app (or a tunnel), set NEMOWLAW_WHOOP_REDIRECT_URI to that https callback, "
+            "register the same URL at WHOOP, then Open authorize URL again."
+        )
+    return exact
+
+
 def require_whoop_oauth_client(settings: Settings) -> None:
     settings.validate_whoop_oauth_urls()
     if not settings.whoop_client_id or not settings.whoop_client_secret:
-        raise WhoopConfigError("NEMOWLAW_WHOOP_CLIENT_ID and NEMOWLAW_WHOOP_CLIENT_SECRET are required.")
+        raise WhoopConfigError(
+            "WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET are required "
+            "(or legacy NEMOWLAW_WHOOP_CLIENT_ID / NEMOWLAW_WHOOP_CLIENT_SECRET)."
+        )
 
 
 def require_whoop_config(settings: Settings) -> None:

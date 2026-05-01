@@ -3,6 +3,9 @@
 .env
 .env.*
 
+# Agent debug NDJSON logs (working tree only)
+debug-*.log
+
 # Dependencies
 node_modules/
 

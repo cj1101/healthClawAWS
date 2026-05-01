@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,8 +28,36 @@ from nemoclaw_health.connectors.whoop_oauth import (
     disconnect_whoop,
     exchange_callback_code,
     oauth_status_from_state,
+    resolve_whoop_redirect_uri,
+    whoop_authorize_dashboard_hint,
 )
 from nemoclaw_health.connectors.whoop_sync import sync_whoop
+
+
+# #region agent log
+def _agent_whoop_oauth_debug(
+    *,
+    hypothesis_id: str,
+    message: str,
+    data: dict[str, Any],
+) -> None:
+    try:
+        log_path = Path(__file__).resolve().parents[2] / "debug-75c232.log"
+        payload = {
+            "sessionId": "75c232",
+            "hypothesisId": hypothesis_id,
+            "location": "nemoclaw_health.app:whoop_authorize_url",
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with log_path.open("a", encoding="utf-8") as lf:
+            lf.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
+# #endregion
 from nemoclaw_health.data_entry import DataEntryService
 from nemoclaw_health.debug_service import (
     analyze_environment,
@@ -407,9 +437,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db = get_db(s)
         try:
             env_rd = (s.whoop_redirect_uri or "").strip()
-            effective_redirect = env_rd or callback_url_from_request(request)
+            derived_rd = callback_url_from_request(request)
+            effective_redirect, redirect_provenance = resolve_whoop_redirect_uri(s, request)
+            # #region agent log
+            _agent_whoop_oauth_debug(
+                hypothesis_id="H1_H2_H3",
+                message="whoop_authorize_redirect_inputs",
+                data={
+                    "redirect_provenance": redirect_provenance,
+                    "env_redirect_set": bool(env_rd),
+                    "env_redirect": env_rd if env_rd else None,
+                    "derived_redirect": derived_rd,
+                    "effective_redirect": effective_redirect,
+                    "env_equals_effective": env_rd == effective_redirect,
+                    "forwarded_proto": (request.headers.get("x-forwarded-proto") or "")[:80],
+                    "forwarded_host": (request.headers.get("x-forwarded-host") or "")[:120],
+                    "host_header": (request.headers.get("host") or "")[:120],
+                    "request_base_url": str(request.base_url).rstrip("/"),
+                },
+            )
+            # #endregion
             url = build_authorization_url(db, s, redirect_uri=effective_redirect)
-            return {"authorization_url": url, "redirect_uri": effective_redirect}
+            # #region agent log
+            q = urllib.parse.urlparse(url).query
+            rd_in_url = (urllib.parse.parse_qs(q).get("redirect_uri") or [""])[0]
+            _agent_whoop_oauth_debug(
+                hypothesis_id="H4_H5",
+                message="whoop_authorize_url_built",
+                data={
+                    "effective_equals_embedded": rd_in_url == effective_redirect,
+                    "effective_redirect": effective_redirect,
+                    "embedded_redirect_uri_decoded": rd_in_url,
+                    "auth_url_host": urllib.parse.urlparse(url).netloc[:120],
+                },
+            )
+            # #endregion
+            return {
+                "authorization_url": url,
+                "redirect_uri": effective_redirect,
+                "redirect_provenance": redirect_provenance,
+                "dashboard_hint": whoop_authorize_dashboard_hint(effective_redirect),
+            }
         except WhoopConfigError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
 

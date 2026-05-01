@@ -212,11 +212,16 @@ async function main() {
         {
           authorization_url: url,
           redirect_uri: u.redirect_uri,
+          redirect_provenance: u.redirect_provenance,
+          dashboard_hint: u.dashboard_hint,
           hint: "Register redirect_uri exactly in WHOOP Developer Dashboard; popup_blocked_use_copy_or_link",
         },
         null,
         2,
       );
+      if (typeof u.dashboard_hint === "string" && u.dashboard_hint) {
+        $("whoopAuthErr").textContent = u.dashboard_hint;
+      }
       const win = window.open(url, "_blank", "noopener");
       if (!win || win.closed) {
         $("whoopCopyAuthUrl")?.classList.remove("hidden");

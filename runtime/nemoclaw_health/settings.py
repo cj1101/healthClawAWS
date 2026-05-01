@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 WHOOP_OAUTH_AUTH_DEFAULT = "https://api.prod.whoop.com/oauth/oauth2/auth"
@@ -35,8 +36,15 @@ class Settings(BaseSettings):
     openrouter_api_base: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "deepseek/deepseek-v4-pro"
 
-    whoop_client_id: str | None = None
-    whoop_client_secret: str | None = None
+    # Prefer unprefixed WHOOP_* (matches common WHOOP docs); NEMOWLAW_* kept for backward compatibility.
+    whoop_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("WHOOP_CLIENT_ID", "NEMOWLAW_WHOOP_CLIENT_ID"),
+    )
+    whoop_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("WHOOP_CLIENT_SECRET", "NEMOWLAW_WHOOP_CLIENT_SECRET"),
+    )
     whoop_redirect_uri: str | None = None
     whoop_auth_url: str = WHOOP_OAUTH_AUTH_DEFAULT
     whoop_token_url: str = WHOOP_OAUTH_TOKEN_DEFAULT
