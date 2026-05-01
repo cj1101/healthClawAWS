@@ -210,9 +210,25 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not isinstance(reply, str):
         reply = str(data)
 
-    for raw_part in _chunks(reply):
-        safe = escape(raw_part).replace("\n", "<br/>")
+    parts = _chunks(reply)
+    for raw_part in parts:
+        # Telegram HTML mode accepts <br>, not XHTML <br/> (BadRequest: unsupported start tag "br/").
+        safe = escape(raw_part).replace("\n", "<br>")
         await update.message.reply_text(safe, parse_mode="HTML")
+    # #region agent log
+    try:
+        from nemoclaw_health.debug_ndjson import acd858_log
+
+        acd858_log(
+            "telegram_bot.py:on_text",
+            "reply_chunks_sent_ok",
+            "H-verify",
+            runId="post-fix",
+            chunk_count=len(parts),
+        )
+    except Exception:
+        pass
+    # #endregion
 
 
 def main() -> None:
