@@ -74,6 +74,50 @@ def test_whoop_oauth_authorize_then_callback(monkeypatch, iso_test_settings):
     assert tok == "a1"
 
 
+def test_whoop_callback_redirects_after_success_when_browser_accept(
+    monkeypatch,
+    iso_test_settings,
+):
+    monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_ID", raising=False)
+    monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("NEMOWLAW_WHOOP_REDIRECT_URI", raising=False)
+
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "test-cli",
+            "whoop_client_secret": "secret",
+            "whoop_redirect_uri": "http://localhost:9999/v1/connectors/whoop/callback",
+        },
+    )
+    app = create_app(cfg)
+    monkeypatch.setattr(
+        wo,
+        "token_exchange_authorization_code",
+        lambda _settings, **_k: {  # noqa: ARG005
+            "access_token": "a2",
+            "refresh_token": "r2",
+            "expires_in": 3600,
+            "scope": "offline",
+        },
+    )
+
+    c1 = TestClient(app)
+    c1.get("/v1/connectors/whoop/authorize-url")
+    db = get_db(cfg)
+    with db.transaction() as cur:
+        st = fetch_connector_state(cur, "whoop")
+    oauth_state = (st.get("oauth_pending") or {}).get("state")
+
+    cb = c1.get(
+        "/v1/connectors/whoop/callback",
+        params={"code": "another-code", "state": oauth_state},
+        headers={"Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8"},
+        follow_redirects=False,
+    )
+    assert cb.status_code == 302
+    assert cb.headers["location"] == "/?whoop=connected"
+
+
 def test_whoop_callback_state_mismatch(iso_test_settings):
     cfg = iso_test_settings.model_copy(
         update={
@@ -250,3 +294,67 @@ def test_http_job_whoop_sync_matches_sync(monkeypatch, iso_test_settings):
     assert r_job.status_code == 200
     assert r_direct.status_code == 200
     assert r_job.json()["totals"]["workout"]["fetched"] == r_direct.json()["totals"]["workout"]["fetched"]
+
+
+def test_whoop_authorize_url_rejects_your_domain_placeholder(iso_test_settings):
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "cid",
+            "whoop_client_secret": "sec",
+            "whoop_redirect_uri": "https://YOUR_DOMAIN/v1/connectors/whoop/callback",
+        },
+    )
+    app = create_app(cfg)
+    r = TestClient(app).get("/v1/connectors/whoop/authorize-url")
+    assert r.status_code == 503
+    assert "YOUR_DOMAIN" in r.json()["detail"]
+
+
+def test_whoop_authorize_url_blocks_public_http_redirect(iso_test_settings):
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "cid",
+            "whoop_client_secret": "sec",
+            "whoop_redirect_uri": "http://203.0.113.1/v1/connectors/whoop/callback",
+        },
+    )
+    app = create_app(cfg)
+    r = TestClient(app).get("/v1/connectors/whoop/authorize-url")
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert "https" in detail.lower() or "WHOOP" in detail
+    assert "203.0.113.1" in detail or "redirect_uri" in detail.lower()
+
+
+def test_whoop_http_redirect_disallowed_for_public_host():
+    assert wo.whoop_http_redirect_disallowed_for_host(
+        "http://44.200.84.118:8000/v1/connectors/whoop/callback",
+    )
+    assert not wo.whoop_http_redirect_disallowed_for_host("http://localhost:8000/v1/connectors/whoop/callback")
+    assert not wo.whoop_http_redirect_disallowed_for_host("http://app.localhost/v1/connectors/whoop/callback")
+    assert not wo.whoop_http_redirect_disallowed_for_host("https://44.200.84.118/v1/connectors/whoop/callback")
+
+
+def test_whoop_callback_returns_detail_when_whoop_sends_oauth_error(iso_test_settings):
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "c",
+            "whoop_client_secret": "s",
+            "whoop_redirect_uri": "http://localhost/cb",
+        },
+    )
+    app = create_app(cfg)
+    cl = TestClient(app)
+    r = cl.get(
+        "/v1/connectors/whoop/callback",
+        params={
+            "error": "invalid_request",
+            "error_description": "malformed",
+            "error_hint": "insecure protocol",
+            "state": "abcd1234",
+        },
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["oauth_error"] == "invalid_request"
+    assert detail["error_hint"] == "insecure protocol"

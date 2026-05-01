@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -22,11 +24,75 @@ from nemoclaw_health.connectors.whoop_oauth import (
     WhoopOAuthError,
     WhoopStateError,
     build_authorization_url,
+    callback_url_from_request,
     disconnect_whoop,
     exchange_callback_code,
     oauth_status_from_state,
+    resolve_whoop_redirect_uri,
+    whoop_authorize_dashboard_hint,
+    whoop_http_redirect_disallowed_for_host,
 )
 from nemoclaw_health.connectors.whoop_sync import sync_whoop
+
+
+def _whoop_callback_browser_flow(request: Request) -> bool:
+    """WHOOP redirects the user's browser here; they'll have text/html in Accept."""
+    return "text/html" in (request.headers.get("accept") or "").lower()
+
+
+# #region agent log
+_DEBUG_DD4749 = Path(__file__).resolve().parents[2] / ".cursor" / "debug-dd4749.log"
+
+
+def _debug_dd4749_log(
+    *,
+    hypothesis_id: str,
+    location: str,
+    message: str,
+    data: dict[str, Any],
+    run_id: str | None = None,
+) -> None:
+    try:
+        _DEBUG_DD4749.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "sessionId": "dd4749",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        if run_id:
+            payload["runId"] = run_id
+        with _DEBUG_DD4749.open("a", encoding="utf-8") as lf:
+            lf.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def _agent_whoop_oauth_debug(
+    *,
+    hypothesis_id: str,
+    message: str,
+    data: dict[str, Any],
+) -> None:
+    try:
+        log_path = Path(__file__).resolve().parents[2] / "debug-75c232.log"
+        payload = {
+            "sessionId": "75c232",
+            "hypothesisId": hypothesis_id,
+            "location": "nemoclaw_health.app:whoop_authorize_url",
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with log_path.open("a", encoding="utf-8") as lf:
+            lf.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
+# #endregion
 from nemoclaw_health.data_entry import DataEntryService
 from nemoclaw_health.debug_service import (
     analyze_environment,
@@ -42,8 +108,10 @@ from nemoclaw_health.events import (
 )
 from nemoclaw_health.orchestrator import HealthOrchestrator
 from nemoclaw_health.export_backup import export_raw_events_jsonl
+from nemoclaw_health.health_coach_store import configure_health_coach_db, health_store_bootstrap
 from nemoclaw_health.retention import run_delegation_metadata_prune, run_raw_event_prune
 from nemoclaw_health.settings import Settings
+from nemoclaw_health.storage_catalog import build_storage_catalog
 
 
 class ChatReq(BaseModel):
@@ -107,18 +175,44 @@ class DebugAnalyzeBody(BaseModel):
     task_id: str | None = None
 
 
+class HealthBiometricUpsertReq(BaseModel):
+    sample_date: str = Field(..., min_length=10, max_length=32)
+    source: str = Field(..., min_length=1)
+    hrv_rmssd_milli: float | None = None
+    resting_hr: float | None = None
+    sleep_hours: float | None = None
+    sleep_performance_pct: float | None = None
+    recovery_score: float | None = None
+    avg_strain: float | None = None
+    workout_kcal: float | None = None
+    workout_count: int | None = None
+    body_weight_kg: float | None = None
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        configure_health_coach_db(settings.resolved_health_db())
+        health_store_bootstrap()
         db = get_db(settings)
         db.init_schema()
+        DataEntryService(settings).ensure_optional_seed_domains()
         settings.resolved_artifact_log().parent.mkdir(parents=True, exist_ok=True)
         settings.resolved_apple_imports_dir().mkdir(parents=True, exist_ok=True)
         yield
 
-    app = FastAPI(title="Nemoclaw Health", lifespan=lifespan)
+    app = FastAPI(
+        title="Nemoclaw Health",
+        lifespan=lifespan,
+        openapi_tags=[
+            {
+                "name": "data-entry",
+                "description": "Data-entry subagent: health.db, storage catalog, structured ingest.",
+            },
+        ],
+    )
     app.state.settings = settings
 
     def svc_settings() -> Settings:
@@ -392,6 +486,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tr_c = cur.execute("SELECT COUNT(*) FROM tracking_registry").fetchone()[0]
         return StorageSummary(raw_events=re_c, tracking_domains=tr_c, sqlite_path=str(s.resolved_sqlite()))
 
+    @app.get("/v1/storage/catalog", tags=["data-entry"])
+    def storage_catalog(
+        s: Settings = Depends(svc_settings),
+        tables: Annotated[int, Query()] = 0,
+    ):
+        return build_storage_catalog(s, include_tables=bool(tables))
+
+    @app.post("/v1/data-entry/health-store/bootstrap", tags=["data-entry"])
+    def data_entry_health_store_bootstrap(s: Settings = Depends(svc_settings)):
+        return DataEntryService(s).health_store_bootstrap()
+
+    @app.get("/v1/data-entry/catalog", tags=["data-entry"])
+    def data_entry_catalog(s: Settings = Depends(svc_settings)):
+        return DataEntryService(s).build_data_entry_catalog()
+
+    @app.get("/v1/data-entry/domain/{slug}/rows", tags=["data-entry"])
+    def data_entry_domain_rows(
+        slug: str,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        since: Annotated[str | None, Query()] = None,
+        s: Settings = Depends(svc_settings),
+    ):
+        try:
+            return DataEntryService(s).list_domain_rows(slug=slug, limit=limit, since=since)
+        except ValueError as e:
+            if str(e) == "unknown_domain":
+                raise HTTPException(status_code=404, detail="unknown domain") from e
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/v1/data-entry/events", tags=["data-entry"])
+    def data_entry_events(
+        domain: Annotated[str | None, Query()] = None,
+        source: Annotated[str | None, Query()] = None,
+        since: Annotated[str | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        s: Settings = Depends(svc_settings),
+    ):
+        try:
+            return DataEntryService(s).list_raw_events_filtered(
+                domain=domain,
+                source=source,
+                since=since,
+                limit=limit,
+            )
+        except ValueError as e:
+            if str(e) == "unknown_domain":
+                raise HTTPException(status_code=404, detail="unknown domain") from e
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/v1/data-entry/insight-context", tags=["data-entry"])
+    def data_entry_insight_context(
+        days: Annotated[int, Query(ge=1, le=90)] = 14,
+        recent_events_limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        meals_limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        s: Settings = Depends(svc_settings),
+    ):
+        return DataEntryService(s).build_insight_context(
+            days=days,
+            recent_events_limit=recent_events_limit,
+            meals_row_limit=meals_limit,
+        )
+
+    @app.get("/v1/data-entry/meals", tags=["data-entry"])
+    def data_entry_meals(
+        days: Annotated[int, Query(ge=1, le=90)] = 14,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        s: Settings = Depends(svc_settings),
+    ):
+        return DataEntryService(s).meals_window_payload(days=days, limit=limit)
+
+    @app.post("/v1/data-entry/health-store/biometric-sample", tags=["data-entry"])
+    def data_entry_health_biometric(
+        req: HealthBiometricUpsertReq = Body(...),
+        s: Settings = Depends(svc_settings),
+    ):
+        return DataEntryService(s).health_store_upsert_biometric(
+            sample_date=req.sample_date[:10],
+            source=req.source,
+            hrv_rmssd_milli=req.hrv_rmssd_milli,
+            resting_hr=req.resting_hr,
+            sleep_hours=req.sleep_hours,
+            sleep_performance_pct=req.sleep_performance_pct,
+            recovery_score=req.recovery_score,
+            avg_strain=req.avg_strain,
+            workout_kcal=req.workout_kcal,
+            workout_count=req.workout_count,
+            body_weight_kg=req.body_weight_kg,
+        )
+
     # --- Phase 2: WHOOP + Apple Health connectors ---
 
     @app.get("/v1/connectors/whoop/status")
@@ -402,29 +585,126 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return oauth_status_from_state(blob)
 
     @app.get("/v1/connectors/whoop/authorize-url")
-    def whoop_authorize_url(s: Settings = Depends(svc_settings)):
+    def whoop_authorize_url(request: Request, s: Settings = Depends(svc_settings)):
         db = get_db(s)
         try:
-            url = build_authorization_url(db, s)
-            return {"authorization_url": url}
+            env_rd = (s.whoop_redirect_uri or "").strip()
+            derived_rd = callback_url_from_request(request)
+            effective_redirect, redirect_provenance = resolve_whoop_redirect_uri(s, request)
+            # #region agent log
+            _agent_whoop_oauth_debug(
+                hypothesis_id="H1_H2_H3",
+                message="whoop_authorize_redirect_inputs",
+                data={
+                    "redirect_provenance": redirect_provenance,
+                    "env_redirect_set": bool(env_rd),
+                    "env_redirect": env_rd if env_rd else None,
+                    "derived_redirect": derived_rd,
+                    "effective_redirect": effective_redirect,
+                    "env_equals_effective": env_rd == effective_redirect,
+                    "forwarded_proto": (request.headers.get("x-forwarded-proto") or "")[:80],
+                    "forwarded_host": (request.headers.get("x-forwarded-host") or "")[:120],
+                    "host_header": (request.headers.get("host") or "")[:120],
+                    "request_base_url": str(request.base_url).rstrip("/"),
+                },
+            )
+            # #endregion
+            if whoop_http_redirect_disallowed_for_host(effective_redirect):
+                # #region agent log
+                _debug_dd4749_log(
+                    hypothesis_id="H4_http_public_blocked_at_authorize",
+                    location="nemoclaw_health.app:whoop_authorize_url",
+                    message="blocked_authorize_whoop_requires_https_for_public_redirect",
+                    data={
+                        "effective_redirect": effective_redirect,
+                        "redirect_provenance": redirect_provenance,
+                    },
+                )
+                # #endregion
+                raise WhoopConfigError(
+                    "WHOOP rejects http:// redirect_uri for this host (only localhost-style "
+                    "hosts may use http). Use https://..., set NEMOWLAW_WHOOP_REDIRECT_URI to the exact "
+                    "https callback registered at developer-dashboard.whoop.com, terminate TLS in nginx "
+                    "(docs/ec2-debug.md / certbot), then open authorize from https://your-host/. "
+                    f"Current redirect_uri resolves to: {effective_redirect}",
+                )
+            url = build_authorization_url(db, s, redirect_uri=effective_redirect)
+            # #region agent log
+            q = urllib.parse.urlparse(url).query
+            rd_in_url = (urllib.parse.parse_qs(q).get("redirect_uri") or [""])[0]
+            _agent_whoop_oauth_debug(
+                hypothesis_id="H4_H5",
+                message="whoop_authorize_url_built",
+                data={
+                    "effective_equals_embedded": rd_in_url == effective_redirect,
+                    "effective_redirect": effective_redirect,
+                    "embedded_redirect_uri_decoded": rd_in_url,
+                    "auth_url_host": urllib.parse.urlparse(url).netloc[:120],
+                },
+            )
+            # #endregion
+            _debug_dd4749_log(
+                hypothesis_id="H1_https_required",
+                location="nemoclaw_health.app:whoop_authorize_url",
+                message="redirect_uri_whoop_https_policy",
+                data={
+                    "effective_redirect": effective_redirect,
+                    "whoop_disallows_http_public": whoop_http_redirect_disallowed_for_host(
+                        effective_redirect,
+                    ),
+                    "redirect_provenance": redirect_provenance,
+                },
+            )
+            return {
+                "authorization_url": url,
+                "redirect_uri": effective_redirect,
+                "redirect_provenance": redirect_provenance,
+                "dashboard_hint": whoop_authorize_dashboard_hint(effective_redirect),
+                "whoop_disallows_http_public": whoop_http_redirect_disallowed_for_host(
+                    effective_redirect,
+                ),
+            }
         except WhoopConfigError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
 
     @app.get("/v1/connectors/whoop/callback")
     def whoop_callback(
+        request: Request,
         s: Settings = Depends(svc_settings),
         code: Annotated[str | None, Query()] = None,
         state: Annotated[str | None, Query()] = None,
+        error: Annotated[str | None, Query()] = None,
+        error_description: Annotated[str | None, Query()] = None,
+        error_hint: Annotated[str | None, Query()] = None,
     ):
         db = get_db(s)
+        if error:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "oauth_error": error,
+                    "error_description": error_description,
+                    "error_hint": error_hint,
+                    "message": (
+                        "WHOOP rejected or aborted the OAuth redirect. "
+                        "If error_hint mentions insecure protocol, use an https:// redirect_uri "
+                        "with a public hostname (nginx + TLS); see dashboard_hint from "
+                        "GET /v1/connectors/whoop/authorize-url."
+                    ),
+                },
+            )
         try:
-            return exchange_callback_code(db, s, code=code, state=state)
+            payload = exchange_callback_code(db, s, code=code, state=state)
         except WhoopStateError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except WhoopConfigError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         except WhoopOAuthError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        want_json = (request.query_params.get("format") or "").strip().lower() == "json"
+        if isinstance(payload, dict) and payload.get("ok") and _whoop_callback_browser_flow(request) and not want_json:
+            return RedirectResponse(url="/?whoop=connected", status_code=302)
+        return payload
 
     @app.post("/v1/connectors/whoop/disconnect")
     def whoop_disconnect(s: Settings = Depends(svc_settings)):

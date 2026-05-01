@@ -27,6 +27,9 @@
     <button type="button" data-tab="chat">Chat</button>
     <button type="button" data-tab="timeline">Timeline</button>
     <button type="button" data-tab="data">Log data</button>
+    <button type="button" data-tab="data-domains">My data</button>
+    <button type="button" data-tab="food-log">Food log</button>
+    <button type="button" data-tab="data-stores">Data entry · Stores</button>
     <button type="button" data-tab="integrations">WHOOP &amp; Health</button>
     <button type="button" data-tab="debug">Debug</button>
     <button type="button" data-tab="backup">Backup</button>
@@ -36,6 +39,7 @@
     <section id="tab-onboard" class="tab hidden">
       <h2>Onboarding</h2>
       <p class="muted">Answer briefly, then review and confirm before saving to your profile.</p>
+      <p id="obProfileHint" class="hint-banner muted" aria-live="polite"></p>
       <div class="grid2">
         <label>Primary goal <select id="obGoal">
           <option value="weight_loss">Weight loss</option>
@@ -75,6 +79,52 @@
       <pre id="tlOut" class="preview"></pre>
     </section>
 
+    <section id="tab-data-domains" class="tab hidden">
+      <h2>My data</h2>
+      <p class="muted">Logical domains from your health data. Select a domain to preview recent rows.</p>
+      <p id="dedomMeta" class="muted" style="margin: 0 0 0.5rem;"></p>
+      <button type="button" id="dedomReload">Refresh domains</button>
+      <pre id="dedomCatalogErr" class="error" style="margin-top: 0.5rem;"></pre>
+      <div class="dedom-layout">
+        <div class="dedom-list-wrap">
+          <table class="catalog-sheet dedom-table" aria-label="Data domains">
+            <thead>
+              <tr>
+                <th>Domain</th>
+                <th>Rows</th>
+                <th>Sources</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody id="dedomTbody"></tbody>
+          </table>
+          <p id="dedomEmpty" class="empty-state hidden">No domains returned yet. Try logging data or reconnect integrations.</p>
+        </div>
+        <div class="dedom-detail">
+          <h3 class="dedom-detail-title">Sample rows</h3>
+          <p id="dedomRowsHint" class="muted">Select a domain.</p>
+          <pre id="dedomRowsErr" class="error"></pre>
+          <pre id="dedomRowsOut" class="preview dedom-rows-pre"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-food-log" class="tab hidden">
+      <h2>Food log</h2>
+      <p class="muted">Recent meals from your data pipeline (last 14 days).</p>
+      <p id="flMeta" class="muted" style="margin: 0 0 0.5rem;"></p>
+      <button type="button" id="flReload">Reload</button>
+      <pre id="flErr" class="error" style="margin-top: 0.5rem;"></pre>
+      <div id="flTableWrap" class="catalog-wrap hidden">
+        <table class="catalog-sheet" id="flTable" aria-label="Food log">
+          <thead id="flThead"></thead>
+          <tbody id="flTbody"></tbody>
+        </table>
+      </div>
+      <p id="flEmpty" class="empty-state hidden">No meals in this window.</p>
+      <pre id="flFallback" class="preview hidden"></pre>
+    </section>
+
     <section id="tab-data" class="tab hidden">
       <h2>Log data</h2>
       <label>Domain slug <input id="deDomain" placeholder="food_log" value="food_log" /></label>
@@ -83,6 +133,36 @@
       <button type="button" id="deReg">Register domain (if new)</button>
       <button type="button" id="deIngest">Ingest</button>
       <pre id="deOut" class="preview"></pre>
+    </section>
+
+    <section id="tab-data-stores" class="tab hidden">
+      <h2>Data entry · Data stores</h2>
+      <p class="muted catalog-banner">
+        Multi-database overview for operators. This view and the related APIs are maintained by the <strong>data-entry</strong> subagent
+        (nemoclaw + OpenClaw <code>health.db</code>). Use <strong>Reload catalog</strong> to refresh the spreadsheet; <strong>Bootstrap health.db</strong> creates the file and schema if missing.
+      </p>
+      <p id="dedCatalogMeta" class="muted" style="margin: 0 0 0.5rem;"></p>
+      <button type="button" id="dedReload">Reload catalog</button>
+      <button type="button" id="dedBootstrap">Bootstrap health.db</button>
+      <pre id="dedCatalogErr" class="error" style="margin-top: 0.5rem;"></pre>
+      <p id="dedStoresEmpty" class="empty-state hidden">No data stores in the catalog yet. Use Bootstrap health.db if this server uses a local SQLite mirror.</p>
+      <div class="catalog-wrap">
+        <table class="catalog-sheet" id="dedCatalogTable" aria-label="Data stores">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Kind</th>
+              <th>Consumers</th>
+              <th>Exists</th>
+              <th>Size</th>
+              <th>Modified</th>
+              <th>WAL / SHM</th>
+              <th>Path</th>
+            </tr>
+          </thead>
+          <tbody id="dedStoresTbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section id="tab-integrations" class="tab hidden">

@@ -76,7 +76,8 @@ Configure secrets:
 ```bash
 cp deploy/ec2/ec2.env.example .env
 chmod 600 .env
-# edit .env — set NEMOWLAW_DASHBOARD_PASSWORD, NEMOWLAW_JOB_TOKEN, WHOOP + OpenRouter vars
+# edit .env — set NEMOWLAW_DASHBOARD_PASSWORD, NEMOWLAW_JOB_TOKEN, NEMOWLAW_CHAT_BEARER_TOKEN
+# (if using Telegram or other /v1/chat automation), WHOOP + OpenRouter vars
 sudo systemctl restart nemoclaw-health
 ```
 
@@ -88,6 +89,8 @@ sudo systemctl restart nemoclaw-health
 2. Set `NEMOWLAW_PUBLIC_HOSTNAME` and re-run the nginx site generation (or edit `/etc/nginx/sites-available/nemoclaw-health`), then `sudo nginx -t && sudo systemctl reload nginx`.
 3. `sudo certbot --nginx -d your.hostname` — Certbot adds TLS to the site; renewals use the distro’s certbot timer.
 4. Set `NEMOWLAW_WHOOP_REDIRECT_URI` to `https://your.hostname/v1/connectors/whoop/callback` and update the WHOOP developer app to match.
+
+**WHOOP and `http://`:** WHOOP rejects `redirect_uri` values that use **http** for **public** hostnames or IPs (their OAuth error mentions insecure protocol; only **localhost-style** hosts may use `http://`, for example `http://myapp.localhost/`). **`http://YOUR_ELASTIC_IP:8000/...` will fail** after you click Grant. You must complete TLS (path A or B) and register the **same** `https://…/v1/connectors/whoop/callback` URL in the WHOOP dashboard and in `.env`.
 
 **B — Cloudflare Tunnel**
 
@@ -103,6 +106,19 @@ Skip opening **443** on the instance if you prefer: run `cloudflared` with a tun
 | Health | `curl -sf http://127.0.0.1:8000/healthz` |
 | Manual WHOOP job | `./deploy/ec2/scripts/curl-job.sh "$(pwd)" /v1/jobs/whoop-sync` |
 | Manual prunes | `./deploy/ec2/scripts/prune-all.sh "$(pwd)"` |
+
+### Telegram bot (`runtime/nemoclaw_health/telegram_bot.py`)
+
+There is no bundled `systemd` unit for the bot; run it under your own supervisor, `tmux`, or similar, with the same repo `.env` (or equivalent) as `nemoclaw-health` so secrets stay aligned.
+
+- **Bearer + dashboard password:** when `NEMOWLAW_DASHBOARD_PASSWORD` is set, define **`NEMOWLAW_CHAT_BEARER_TOKEN`** in `.env` for **both** the API service and the bot process so `POST /v1/chat` accepts `Authorization: Bearer …` (see README). A **401** from chat usually means the token is missing on the API, empty, or does not match the bot’s env.
+- **Allow list:** `TELEGRAM_ALLOWED_USER_IDS` must be **numeric** Telegram user ids (comma-separated). Usernames are not supported.
+- **Reachability:** from the instance, `curl -sf http://127.0.0.1:8000/healthz` (or your configured `TELEGRAM_NEMOWLAW_API_BASE`) should succeed before expecting replies in Telegram.
+- **Commands:** the bot registers `/start`, `/help`, `/new`, and `/summary` on startup (`setMyCommands`) so the Telegram `/` menu stays in sync. **`/new`** is a user-side “fresh topic” ack (each message is already a separate API turn). **`/summary`** posts a structured holistic-coaching prompt to `/v1/chat`.
+- **Slow or missing replies:** one chat turn can invoke **several** sequential OpenRouter calls; the bot waits up to **`TELEGRAM_CHAT_HTTP_TIMEOUT_S`** (default **900**). It also renews the typing indicator every few seconds while waiting. If requests still time out, raise that env var (and check API logs).
+- **Smoke test** (replace token; optional path/body if your chat API differs):  
+  `curl -sS -X POST http://127.0.0.1:8000/v1/chat -H 'Content-Type: application/json' -H "Authorization: Bearer $NEMOWLAW_CHAT_BEARER_TOKEN" -d '{"message":"ping"}'`
+- **Logs:** if you wrap the bot in a user service, use `journalctl -u <your-unit> -f` the same way as `nemoclaw-health`.
 
 Timers: **WHOOP** roughly every 6 hours (`02,08,14,20`); **prune** daily at **03:30** (raw-event + delegation). Adjust in `deploy/ec2/systemd/*.timer` then `sudo systemctl daemon-reload` + restart the timer.
 

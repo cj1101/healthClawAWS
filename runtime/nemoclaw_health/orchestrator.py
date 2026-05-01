@@ -95,6 +95,69 @@ def classify_intents(text: str) -> tuple[list[str], dict[str, Any]]:
 _VALID_WORKERS = frozenset({"stan", "dick", "joy"})
 
 
+def fetch_data_entry_insight_context(settings: Settings, *, days: int = 14) -> dict[str, Any] | None:
+    """Load bounded insight context from DataEntryService when the backend exposes it.
+
+    Tries ``build_insight_context(days=...)`` then ``get_insight_context`` with the same
+    call pattern. Returns ``None`` if methods are absent, unsupported, errors, or the
+    return value is not a dict.
+    """
+    svc = DataEntryService(settings)
+    for meth in ("build_insight_context", "get_insight_context"):
+        fn = getattr(svc, meth, None)
+        if not callable(fn):
+            continue
+        try:
+            raw = fn(days=days)
+        except TypeError:
+            try:
+                raw = fn()
+            except Exception:
+                raw = None
+        except Exception:
+            continue
+        if isinstance(raw, dict):
+            return raw
+    return None
+
+
+def _bounded_insight_context(insight: dict[str, Any], *, _depth: int = 0) -> dict[str, Any]:
+    """Privacy/size guard: shallow structure, truncated strings/lists, capped nesting — no raw event dumps."""
+    if _depth >= 3:
+        return {}
+    max_keys = 48 if _depth == 0 else 16
+    out: dict[str, Any] = {}
+    omitted = 0
+    for i, (k, v) in enumerate(insight.items()):
+        if i >= max_keys:
+            omitted = len(insight) - max_keys
+            break
+        sk = str(k)[:80]
+        if isinstance(v, (bool, int, float)) or v is None:
+            out[sk] = v
+        elif isinstance(v, str):
+            out[sk] = v[:500] + ("..." if len(v) > 500 else "")
+        elif isinstance(v, list):
+            clipped: list[Any] = []
+            for j, item in enumerate(v[:25]):
+                if isinstance(item, dict):
+                    clipped.append(_bounded_insight_context(item, _depth=_depth + 1))
+                elif isinstance(item, str):
+                    clipped.append(item[:300] + ("..." if len(item) > 300 else ""))
+                elif isinstance(item, (bool, int, float)) or item is None:
+                    clipped.append(item)
+                else:
+                    clipped.append(str(item)[:200])
+            out[sk] = clipped
+        elif isinstance(v, dict):
+            out[sk] = _bounded_insight_context(v, _depth=_depth + 1)
+        else:
+            out[sk] = str(v)[:300]
+    if omitted:
+        out["_omitted_top_level_keys"] = omitted
+    return out
+
+
 def merge_workers_keyword_llm(keyword_workers: list[str], llm_workers: list[Any]) -> list[str]:
     merged: list[str] = []
     for w in keyword_workers:
@@ -347,6 +410,7 @@ def _llm_synthesize(
     joy_tier: str,
     payloads: dict[str, Any],
     data_entry_result: dict[str, Any] | None,
+    insight_context: dict[str, Any] | None,
 ) -> str:
     blob = contracts_prompt_blob("popeye")
     sys_msg = (
@@ -357,6 +421,8 @@ def _llm_synthesize(
         "If Joy tier is watch or urgent, weave in the corresponding Joy disclaimer markers "
         "([[JOY_WATCH_V1]] / [[JOY_URGENT_V1]]) explicitly.\n"
         "If Joy ran at info tier, ensure [[JOY_INFO_V1]] appears when discussing wearable-derived signals.\n"
+        "When ``insight_context`` is present, use only its summaries and counts to ground coaching; "
+        "do not invent specifics beyond that bounded context.\n"
         "Close with the coaching-not-diagnosis framing."
     )
     payload_blob = {
@@ -364,6 +430,7 @@ def _llm_synthesize(
         "joy_tier": joy_tier,
         "worker_payloads": payloads,
         "data_entry_result": data_entry_result,
+        "insight_context": insight_context,
         "user_message": user_message,
     }
     raw = chat_completion(
@@ -417,6 +484,14 @@ class HealthOrchestrator:
         events_for_guard: list[dict[str, Any]] = []
 
         workers, meta = classify_intents(user_message)
+        insight_raw = fetch_data_entry_insight_context(self.settings)
+        bounded_insight = _bounded_insight_context(insight_raw) if insight_raw is not None else None
+        routing_meta: dict[str, Any] = {**meta}
+        if bounded_insight is not None:
+            routing_meta["data_context_available"] = True
+            routing_meta["data_context"] = bounded_insight
+        else:
+            routing_meta["data_context_available"] = False
         joy_tier_final = "info"
         joy_templates_applied: list[str] = []
 
@@ -425,11 +500,25 @@ class HealthOrchestrator:
                 cur,
                 root_task,
                 "popeye",
-                {"phase": "classify_keyword", "workers": workers, "meta": meta},
+                {
+                    "phase": "classify_keyword",
+                    "workers": workers,
+                    "keyword_meta": meta,
+                    "routing_meta": routing_meta,
+                    "insight_context_meta": {
+                        "available": bounded_insight is not None,
+                        "bounded": bounded_insight,
+                    },
+                },
             )
 
         for w in workers:
-            delegation = _delegate_event(root_task, w, f"delegate_to_{w}", {"user_message": user_message, "meta": meta})
+            delegation = _delegate_event(
+                root_task,
+                w,
+                f"delegate_to_{w}",
+                {"user_message": user_message, "meta": routing_meta},
+            )
             delegation["workflow_id"] = f"wf_{root_task}_{w}"
 
             validate_orchestration_event(delegation, enforce_invariant=True)
@@ -438,7 +527,7 @@ class HealthOrchestrator:
             append_jsonl(self.artifact_log, delegation)
             chain.append(f"popeye -> {w} (delegate)")
 
-            stub = run_worker_stub(w, user_message, meta)
+            stub = run_worker_stub(w, user_message, routing_meta)
             if w == "joy":
                 joy_tier_final = stub.get("tier", "info")
 
@@ -460,7 +549,16 @@ class HealthOrchestrator:
 
             with self.db.transaction() as cur:
                 insert_delegation_event(cur, root_task, rtn)
-                insert_agent_run(cur, root_task, w, {"phase": "stub_worker", "stub_response": stub})
+                insert_agent_run(
+                    cur,
+                    root_task,
+                    w,
+                    {
+                        "phase": "stub_worker",
+                        "stub_response": stub,
+                        "data_context_available": routing_meta.get("data_context_available"),
+                    },
+                )
             append_jsonl(self.artifact_log, rtn)
             chain.append(f"{w} -> popeye (structured return)")
 
@@ -500,6 +598,16 @@ class HealthOrchestrator:
         events_for_guard: list[dict[str, Any]] = []
 
         kw_workers, kw_meta = classify_intents(user_message)
+        insight_raw_llm = fetch_data_entry_insight_context(self.settings)
+        bounded_insight_llm = (
+            _bounded_insight_context(insight_raw_llm) if insight_raw_llm is not None else None
+        )
+        routing_meta_llm: dict[str, Any] = {**kw_meta}
+        if bounded_insight_llm is not None:
+            routing_meta_llm["data_context_available"] = True
+            routing_meta_llm["data_context"] = bounded_insight_llm
+        else:
+            routing_meta_llm["data_context_available"] = False
         llm_workers_extra: list[str] = []
         logging_spec: dict[str, Any] = {"should_log": False}
 
@@ -524,6 +632,11 @@ class HealthOrchestrator:
                     "keyword_workers": kw_workers,
                     "merged_workers": workers,
                     "keyword_meta": kw_meta,
+                    "routing_meta": routing_meta_llm,
+                    "insight_context_meta": {
+                        "available": bounded_insight_llm is not None,
+                        "bounded": bounded_insight_llm,
+                    },
                     "logging_spec": logging_spec,
                 },
             )
@@ -539,11 +652,18 @@ class HealthOrchestrator:
             except ValueError as e:
                 data_entry_result = {"status": "error", "detail": str(e)}
 
+            de_payload = {
+                "user_message": user_message,
+                "logging_spec": logging_spec,
+                "data_context_available": routing_meta_llm.get("data_context_available", False),
+            }
+            if bounded_insight_llm is not None:
+                de_payload["data_context"] = bounded_insight_llm
             delegation = _delegate_event(
                 root_task,
                 "data-entry",
                 "delegate_to_data_entry",
-                {"user_message": user_message, "logging_spec": logging_spec},
+                de_payload,
             )
             delegation["workflow_id"] = f"wf_{root_task}_data_entry"
             validate_orchestration_event(delegation, enforce_invariant=True)
@@ -571,7 +691,11 @@ class HealthOrchestrator:
         joy_templates_applied: list[str] = []
 
         for w in workers:
-            delegation = _delegate_event(root_task, w, f"delegate_to_{w}", {"user_message": user_message, "meta": kw_meta})
+            wl_payload = {
+                "user_message": user_message,
+                "meta": routing_meta_llm,
+            }
+            delegation = _delegate_event(root_task, w, f"delegate_to_{w}", wl_payload)
             delegation["workflow_id"] = f"wf_{root_task}_{w}"
 
             validate_orchestration_event(delegation, enforce_invariant=True)
@@ -581,9 +705,9 @@ class HealthOrchestrator:
             chain.append(f"popeye -> {w} (delegate)")
 
             try:
-                stub = _llm_worker(self.settings, w, user_message, kw_meta)
+                stub = _llm_worker(self.settings, w, user_message, routing_meta_llm)
             except Exception:
-                stub = run_worker_stub(w, user_message, kw_meta)
+                stub = run_worker_stub(w, user_message, routing_meta_llm)
 
             worker_payloads[w] = stub
             if w == "joy":
@@ -611,7 +735,11 @@ class HealthOrchestrator:
                     cur,
                     root_task,
                     w,
-                    {"phase": "llm_worker", "structured_response": stub},
+                    {
+                        "phase": "llm_worker",
+                        "structured_response": stub,
+                        "data_context_available": routing_meta_llm.get("data_context_available"),
+                    },
                 )
             append_jsonl(self.artifact_log, rtn)
             chain.append(f"{w} -> popeye (structured return)")
@@ -626,6 +754,7 @@ class HealthOrchestrator:
                 joy_tier_final,
                 worker_payloads,
                 data_entry_result,
+                bounded_insight_llm,
             )
             synth = _finalize_llm_reply(synth, joy_tier_final, workers)
         except Exception:

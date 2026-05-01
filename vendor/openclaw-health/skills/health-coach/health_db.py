@@ -1,13 +1,15 @@
 """
 SQLite foundation for the OpenClaw health platform.
 
-Single authoritative store at skills/health-coach/data/health.db.
+Default store: skills/health-coach/data/health.db.
+Override via set_db_path() or env NEMOWLAW_HEALTH_DB_PATH (used by Nemoclaw Health).
 All tables are created by bootstrap_db() which is safe to call repeatedly
 (migrations are additive-only; no data is dropped).
 """
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -16,7 +18,26 @@ from typing import Any, Dict, Generator, List, Optional
 
 SKILL_DIR = Path(__file__).resolve().parent
 DATA_DIR = SKILL_DIR / "data"
-DB_PATH = DATA_DIR / "health.db"
+
+_db_path_override: Path | None = None
+
+
+def set_db_path(path: Path | None) -> None:
+    """When set (e.g. by Nemoclaw), all connections use this path. Pass None to clear."""
+    global _db_path_override
+    if path is None:
+        _db_path_override = None
+        return
+    _db_path_override = Path(path).expanduser().resolve()
+
+
+def resolved_db_path() -> Path:
+    if _db_path_override is not None:
+        return _db_path_override
+    raw = (os.environ.get("NEMOWLAW_HEALTH_DB_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (DATA_DIR / "health.db").resolve()
 
 # Schema version — increment when adding new tables/columns
 SCHEMA_VERSION = 2
@@ -200,8 +221,9 @@ def _now_iso() -> str:
 
 def bootstrap_db() -> None:
     """Create DB file, run DDL, record schema version. Safe to call repeatedly."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
+    p = resolved_db_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(p) as conn:
         conn.executescript(_DDL)
         conn.execute(
             "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', ?)",
@@ -214,7 +236,7 @@ def bootstrap_db() -> None:
 def db_conn() -> Generator[sqlite3.Connection, None, None]:
     """Context manager yielding a connection with row_factory set."""
     bootstrap_db()
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(resolved_db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

@@ -25,7 +25,10 @@ const api = async (path, opts = {}) => {
 
 const $ = (id) => document.getElementById(id);
 
+const TAB_STORAGE_KEY = "nemoclaw-dash-tab";
+
 let authRequired = false;
+let selectedDomainSlug = "";
 
 async function loadMe() {
   try {
@@ -47,9 +50,428 @@ function showTab(name) {
   if (t) t.classList.remove("hidden");
 }
 
+function fmtBytes(n) {
+  if (n == null || n === undefined) return "—";
+  const u = ["B", "KB", "MB", "GB"];
+  let v = Number(n);
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+function renderDedCatalog(cat) {
+  const meta = $("dedCatalogMeta");
+  if (meta) {
+    meta.textContent = `managed_by_agent: ${cat?.managed_by_agent || "—"}`;
+  }
+  const tb = $("dedStoresTbody");
+  const emptyEl = $("dedStoresEmpty");
+  const stores = cat?.stores || [];
+  if (emptyEl) {
+    if (stores.length === 0) emptyEl.classList.remove("hidden");
+    else emptyEl.classList.add("hidden");
+  }
+  if (!tb) return;
+  tb.innerHTML = "";
+  for (const st of stores) {
+    const tr = document.createElement("tr");
+    const wal =
+      st.kind === "sqlite"
+        ? `${st.wal_exists ? "wal" : "—"} / ${st.shm_exists ? "shm" : "—"}`
+        : "—";
+    const mk = (txt) => {
+      const td = document.createElement("td");
+      td.textContent = txt;
+      return td;
+    };
+    tr.appendChild(mk(st.title ?? ""));
+    tr.appendChild(mk(st.kind ?? ""));
+    tr.appendChild(mk(st.consumers ?? ""));
+    tr.appendChild(mk(st.exists ? "yes" : "no"));
+    tr.appendChild(mk(fmtBytes(st.size_bytes)));
+    tr.appendChild(mk(st.mtime_iso ?? "—"));
+    tr.appendChild(mk(wal));
+    const pathTd = document.createElement("td");
+    pathTd.className = "path-cell";
+    pathTd.textContent = st.path ?? "";
+    tr.appendChild(pathTd);
+    tb.appendChild(tr);
+
+    if (st.kind === "sqlite" && Array.isArray(st.tables) && st.tables.length) {
+      const sub = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 8;
+      const inner = document.createElement("table");
+      inner.className = "catalog-table-nested";
+      inner.setAttribute("aria-label", `Tables: ${st.title || st.id}`);
+      const thr = document.createElement("tr");
+      for (const h of ["SQLite table", "Rows"]) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        thr.appendChild(th);
+      }
+      inner.appendChild(thr);
+      for (const row of st.tables) {
+        const ttr = document.createElement("tr");
+        const a = document.createElement("td");
+        a.textContent = String(row.name ?? "");
+        const b = document.createElement("td");
+        b.textContent = row.row_count < 0 ? "?" : String(row.row_count);
+        ttr.appendChild(a);
+        ttr.appendChild(b);
+        inner.appendChild(ttr);
+      }
+      td.appendChild(inner);
+      sub.appendChild(td);
+      tb.appendChild(sub);
+    }
+  }
+}
+
+async function loadDedCatalog() {
+  const errEl = $("dedCatalogErr");
+  if (errEl) errEl.textContent = "";
+  $("dedStoresEmpty")?.classList.add("hidden");
+  try {
+    const j = await api("v1/storage/catalog?tables=1");
+    renderDedCatalog(j);
+  } catch (e) {
+    if (errEl) errEl.textContent = String(e.message || e);
+    $("dedStoresEmpty")?.classList.remove("hidden");
+  }
+}
+
+function extractDomainList(j) {
+  if (!j || typeof j !== "object") return [];
+  const nested = [
+    j.domains,
+    j.catalog,
+    Array.isArray(j.catalog?.domains) ? j.catalog.domains : null,
+    j.items,
+    j.domain_catalog,
+    j.data?.domains,
+  ].find((x) => Array.isArray(x));
+  if (nested) return nested;
+  if (Array.isArray(j)) return j;
+  return [];
+}
+
+function normalizeDomainRow(raw, idx) {
+  if (typeof raw === "string") {
+    return { slug: raw, label: raw, rowCount: "—", sources: "—", updated: "—" };
+  }
+  const slug =
+    raw.slug ??
+    raw.domain_slug ??
+    raw.domain ??
+    raw.id ??
+    raw.name ??
+    `domain_${idx}`;
+  const label = raw.display_name ?? raw.title ?? slug;
+  const rc =
+    raw.row_count ??
+    raw.rows ??
+    raw.count ??
+    raw.n ??
+    (typeof raw.total_rows === "number" ? raw.total_rows : null);
+  let sources = raw.sources ?? raw.source_summary;
+  if (Array.isArray(sources)) sources = sources.join(", ");
+  else if (sources && typeof sources === "object") sources = JSON.stringify(sources);
+  const updated =
+    raw.last_updated_at ??
+    raw.last_updated ??
+    raw.updated_at ??
+    raw.last_event_at ??
+    raw.modified ??
+    "—";
+  return {
+    slug: String(slug),
+    label: String(label),
+    rowCount: rc != null ? String(rc) : "—",
+    sources: sources != null && sources !== "" ? String(sources) : "—",
+    updated: updated != null ? String(updated) : "—",
+  };
+}
+
+function extractRowsPayload(j) {
+  if (!j || typeof j !== "object") return [];
+  const dataRows = Array.isArray(j.data) ? j.data : j.data?.rows;
+  const arr = [j.rows, j.items, j.records, dataRows, j.samples].find((x) => Array.isArray(x));
+  return arr || [];
+}
+
+async function loadDeDomainsCatalog() {
+  const errEl = $("dedomCatalogErr");
+  const meta = $("dedomMeta");
+  const tb = $("dedomTbody");
+  const emptyEl = $("dedomEmpty");
+  if (errEl) errEl.textContent = "";
+  if (meta) meta.textContent = "";
+  if (tb) tb.innerHTML = "";
+  emptyEl?.classList.add("hidden");
+  try {
+    const j = await api("v1/data-entry/catalog");
+    const list = extractDomainList(j).map(normalizeDomainRow);
+    if (meta) {
+      const hint = j.note ?? j.message ?? "";
+      meta.textContent = hint ? String(hint) : `${list.length} domain(s)`;
+    }
+    if (list.length === 0) {
+      emptyEl?.classList.remove("hidden");
+      return;
+    }
+    for (let i = 0; i < list.length; i += 1) {
+      const d = list[i];
+      const tr = document.createElement("tr");
+      tr.dataset.slug = d.slug;
+      if (d.slug === selectedDomainSlug) tr.classList.add("row-selected");
+      const mk = (txt) => {
+        const td = document.createElement("td");
+        td.textContent = txt;
+        return td;
+      };
+      tr.appendChild(mk(d.label));
+      tr.appendChild(mk(d.rowCount));
+      tr.appendChild(mk(d.sources));
+      tr.appendChild(mk(d.updated));
+      tr.addEventListener("click", () => {
+        selectedDomainSlug = d.slug;
+        document.querySelectorAll("#dedomTbody tr").forEach((r) => r.classList.remove("row-selected"));
+        tr.classList.add("row-selected");
+        loadDomainRows(d.slug);
+      });
+      tb.appendChild(tr);
+    }
+    if (selectedDomainSlug) {
+      const still = list.some((x) => x.slug === selectedDomainSlug);
+      if (still) await loadDomainRows(selectedDomainSlug);
+      else selectedDomainSlug = "";
+    }
+  } catch (e) {
+    if (errEl)
+      errEl.textContent = `GET /v1/data-entry/catalog: ${e.message || e}`;
+    emptyEl?.classList.remove("hidden");
+  }
+}
+
+async function loadDomainRows(slug) {
+  const hint = $("dedomRowsHint");
+  const errEl = $("dedomRowsErr");
+  const out = $("dedomRowsOut");
+  if (errEl) errEl.textContent = "";
+  if (out) out.textContent = "";
+  if (hint) hint.textContent = slug ? `Domain: ${slug}` : "Select a domain.";
+  if (!slug) return;
+  try {
+    const j = await api(`v1/data-entry/domain/${encodeURIComponent(slug)}/rows?limit=50`);
+    const rows = extractRowsPayload(j);
+    if (out) out.textContent = rows.length ? JSON.stringify(rows, null, 2) : "(no rows)";
+  } catch (e) {
+    if (errEl)
+      errEl.textContent = `GET /v1/data-entry/domain/…/rows: ${e.message || e}`;
+    if (out) out.textContent = "";
+  }
+}
+
+function extractMealsArray(j) {
+  if (!j || typeof j !== "object") return [];
+  const paths = [
+    j.meals,
+    j.meal_log,
+    j.items,
+    j.data?.meals,
+    j.context?.meals,
+    j.insights?.meals,
+    j.food_log,
+    j.recent_meals,
+  ];
+  for (const p of paths) {
+    if (Array.isArray(p)) return p;
+  }
+  return [];
+}
+
+function collectKeys(rows, max = 12) {
+  const keys = new Set();
+  for (const row of rows.slice(0, 40)) {
+    if (row && typeof row === "object" && !Array.isArray(row)) {
+      Object.keys(row).forEach((k) => keys.add(k));
+      if (keys.size >= max) break;
+    }
+  }
+  return [...keys].slice(0, max);
+}
+
+function renderMealTable(rows) {
+  const wrap = $("flTableWrap");
+  const thead = $("flThead");
+  const tbody = $("flTbody");
+  const emptyEl = $("flEmpty");
+  const fb = $("flFallback");
+  fb?.classList.add("hidden");
+  fb && (fb.textContent = "");
+  if (!wrap || !thead || !tbody) return;
+  const objs = rows.filter((r) => r && typeof r === "object");
+  if (objs.length === 0) {
+    wrap.classList.add("hidden");
+    emptyEl?.classList.remove("hidden");
+    return;
+  }
+  emptyEl?.classList.add("hidden");
+  wrap.classList.remove("hidden");
+  const cols = collectKeys(objs);
+  thead.innerHTML = "";
+  const hr = document.createElement("tr");
+  for (const c of cols) {
+    const th = document.createElement("th");
+    th.textContent = c;
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  tbody.innerHTML = "";
+  for (const row of objs.slice(0, 50)) {
+    const tr = document.createElement("tr");
+    for (const c of cols) {
+      const td = document.createElement("td");
+      const v = row[c];
+      td.textContent =
+        v == null
+          ? ""
+          : typeof v === "object"
+            ? JSON.stringify(v)
+            : String(v);
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadFoodLogPanel() {
+  const errEl = $("flErr");
+  const meta = $("flMeta");
+  const emptyEl = $("flEmpty");
+  const wrap = $("flTableWrap");
+  const fb = $("flFallback");
+  if (errEl) errEl.textContent = "";
+  if (meta) meta.textContent = "";
+  emptyEl?.classList.add("hidden");
+  wrap?.classList.add("hidden");
+  fb?.classList.add("hidden");
+  $("flTbody").innerHTML = "";
+  $("flThead").innerHTML = "";
+  if (emptyEl) emptyEl.textContent = "No meals in this window.";
+
+  let mealsErr = null;
+  try {
+    const j = await api("v1/data-entry/meals?days=14");
+    if (meta) meta.textContent = "Source: GET /v1/data-entry/meals?days=14";
+    const meals = extractMealsArray(j);
+    if (meals.length) renderMealTable(meals);
+    else {
+      renderMealTable([]);
+      emptyEl?.classList.remove("hidden");
+    }
+    return;
+  } catch (e) {
+    mealsErr = e;
+  }
+
+  try {
+    const j = await api("v1/data-entry/insight-context?days=14");
+    if (meta)
+      meta.textContent =
+        "Source: GET /v1/data-entry/insight-context?days=14 (meals endpoint unavailable)";
+    const meals = extractMealsArray(j);
+    if (meals.length) {
+      renderMealTable(meals);
+      return;
+    }
+    renderMealTable([]);
+    if (fb) {
+      fb.textContent = JSON.stringify(j, null, 2);
+      fb.classList.remove("hidden");
+    }
+    emptyEl?.classList.remove("hidden");
+    if (emptyEl)
+      emptyEl.textContent =
+        "No structured meal list in this response; raw insight-context JSON is below.";
+  } catch (e2) {
+    if (errEl)
+      errEl.textContent = [
+        `GET /v1/data-entry/meals?days=14: ${mealsErr?.message || mealsErr}`,
+        `GET /v1/data-entry/insight-context?days=14: ${e2.message || e2}`,
+      ].join("\n");
+    emptyEl?.classList.remove("hidden");
+    if (emptyEl) emptyEl.textContent = "Could not load food log.";
+  }
+}
+
+async function hydrateProfileFromServer() {
+  const hint = $("obProfileHint");
+  if (!hint) return;
+  hint.textContent = "";
+  try {
+    const j = await api("v1/profile");
+    const profile = j?.profile && typeof j.profile === "object" ? j.profile : {};
+    const ob = profile.onboarding && typeof profile.onboarding === "object" ? profile.onboarding : null;
+    if (ob) {
+      const goalSel = $("obGoal");
+      const intSel = $("obIntensity");
+      const notes = $("obNotes");
+      if (ob.goal_primary && goalSel) {
+        const opt = [...goalSel.options].some((o) => o.value === ob.goal_primary);
+        if (opt) goalSel.value = ob.goal_primary;
+      }
+      if (ob.coaching_intensity && intSel) {
+        const opt = [...intSel.options].some((o) => o.value === ob.coaching_intensity);
+        if (opt) intSel.value = ob.coaching_intensity;
+      }
+      if (notes != null && ob.notes !== undefined && ob.notes !== null) notes.value = String(ob.notes);
+    }
+    const parts = [];
+    parts.push("Profile loaded from server.");
+    if (profile.onboarding_completed === true) parts.push("Onboarding is marked complete.");
+    else if (profile.onboarding_completed === false) parts.push("Onboarding not marked complete yet.");
+    hint.textContent = parts.join(" ");
+    updateObSummaryPre();
+  } catch (e) {
+    hint.textContent = `Could not load profile (refresh may still work after save): ${e.message || e}`;
+    updateObSummaryPre();
+  }
+}
+
+function initialTabName() {
+  let saved = "";
+  try {
+    saved = sessionStorage.getItem(TAB_STORAGE_KEY) || "";
+  } catch {
+    /* ignore */
+  }
+  if (saved && $(`tab-${saved}`)) return saved;
+  return "onboard";
+}
+
+function onTabActivated(name) {
+  if (name === "data-stores") loadDedCatalog();
+  else if (name === "data-domains") loadDeDomainsCatalog();
+  else if (name === "food-log") loadFoodLogPanel();
+}
+
 function setupNav() {
   document.querySelectorAll("[data-tab]").forEach((btn) => {
-    btn.addEventListener("click", () => showTab(btn.getAttribute("data-tab")));
+    btn.addEventListener("click", () => {
+      const name = btn.getAttribute("data-tab");
+      showTab(name);
+      try {
+        sessionStorage.setItem(TAB_STORAGE_KEY, name);
+      } catch {
+        /* ignore */
+      }
+      onTabActivated(name);
+    });
   });
 }
 
@@ -92,7 +514,11 @@ async function main() {
   if (ok) {
     $("loginPanel")?.classList.add("hidden");
     $("mainNav")?.classList.remove("hidden");
-    showTab("onboard");
+    const tab = initialTabName();
+    showTab(tab);
+    await hydrateProfileFromServer();
+    if (tab !== "data-stores") loadDedCatalog();
+    onTabActivated(tab);
   } else if (!($("loginErr")?.textContent)) {
     $("loginPanel")?.classList.remove("hidden");
   }
@@ -139,6 +565,7 @@ async function main() {
         }),
       });
       $("obStatus").textContent = "Saved profile + goal.";
+      await hydrateProfileFromServer();
     } catch (e) {
       $("obStatus").textContent = `Error: ${e.message}`;
     }
@@ -208,7 +635,20 @@ async function main() {
         $("whoopStatus").textContent = JSON.stringify(u, null, 2);
         return;
       }
-      $("whoopStatus").textContent = JSON.stringify({ authorization_url: url, hint: "popup_blocked_use_copy_or_link" }, null, 2);
+      $("whoopStatus").textContent = JSON.stringify(
+        {
+          authorization_url: url,
+          redirect_uri: u.redirect_uri,
+          redirect_provenance: u.redirect_provenance,
+          dashboard_hint: u.dashboard_hint,
+          hint: "Register redirect_uri exactly in WHOOP Developer Dashboard; popup_blocked_use_copy_or_link",
+        },
+        null,
+        2,
+      );
+      if (typeof u.dashboard_hint === "string" && u.dashboard_hint) {
+        $("whoopAuthErr").textContent = u.dashboard_hint;
+      }
       const win = window.open(url, "_blank", "noopener");
       if (!win || win.closed) {
         $("whoopCopyAuthUrl")?.classList.remove("hidden");
@@ -304,6 +744,20 @@ async function main() {
   });
   $("bkSummary")?.addEventListener("click", async () => {
     $("bkSumOut").textContent = JSON.stringify(await api("v1/storage/summary"), null, 2);
+  });
+
+  $("dedReload")?.addEventListener("click", loadDedCatalog);
+  $("dedomReload")?.addEventListener("click", loadDeDomainsCatalog);
+  $("flReload")?.addEventListener("click", loadFoodLogPanel);
+  $("dedBootstrap")?.addEventListener("click", async () => {
+    const errEl = $("dedCatalogErr");
+    if (errEl) errEl.textContent = "";
+    try {
+      await api("v1/data-entry/health-store/bootstrap", { method: "POST", body: "{}" });
+      await loadDedCatalog();
+    } catch (e) {
+      if (errEl) errEl.textContent = String(e.message || e);
+    }
   });
 
   if (ok) await whoopRefresh();

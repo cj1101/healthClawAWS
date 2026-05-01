@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from nemoclaw_health.db import Database, get_db, insert_raw_event, new_id
+from nemoclaw_health.db import _DYN_SLUG_OK, fetch_profile, get_db, insert_raw_event, new_id
+from nemoclaw_health.health_coach_store import (
+    health_db_biometrics_window,
+    health_db_meals_window,
+    health_store_bootstrap,
+    mirror_ingest_payload_to_biometric,
+    sqlite_tables_with_counts,
+    upsert_biometric_sample,
+)
 from nemoclaw_health.settings import Settings
 
 
@@ -14,6 +22,40 @@ def utc_now_iso() -> str:
 
 
 _slug_re = re.compile(r"[^a-z0-9]+")
+
+MAX_QUERY_LIMIT = 200
+
+FOOD_LOG_SEED_SCHEMA_HINT = (
+    "meal_ts",
+    "meal_date",
+    "description",
+    "protein_g",
+    "carbs_g",
+    "fats_g",
+    "fiber_g",
+    "calories",
+)
+
+
+def clamp_query_limit(limit: int | None, *, default: int = 50, max_lim: int = MAX_QUERY_LIMIT) -> int:
+    if limit is None:
+        return default
+    try:
+        n = int(limit)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(max_lim, n))
+
+
+def clamp_insight_days(days: int | None) -> int:
+    if days is None:
+        return 14
+    try:
+        d = int(days)
+    except (TypeError, ValueError):
+        return 14
+    return max(1, min(90, d))
+
 
 ALLOWED_INGEST_SOURCES = frozenset(
     {
@@ -114,6 +156,41 @@ class DataEntryService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.db = get_db(settings)
+
+    def health_store_bootstrap(self) -> dict[str, Any]:
+        """Create or migrate OpenClaw ``health.db`` at the configured path."""
+        return health_store_bootstrap()
+
+    def health_store_upsert_biometric(
+        self,
+        *,
+        sample_date: str,
+        source: str,
+        hrv_rmssd_milli: float | None = None,
+        resting_hr: float | None = None,
+        sleep_hours: float | None = None,
+        sleep_performance_pct: float | None = None,
+        recovery_score: float | None = None,
+        avg_strain: float | None = None,
+        workout_kcal: float | None = None,
+        workout_count: int | None = None,
+        body_weight_kg: float | None = None,
+    ) -> dict[str, Any]:
+        normalize_ingest_source(source)
+        upsert_biometric_sample(
+            sample_date=sample_date,
+            source=source,
+            hrv_rmssd_milli=hrv_rmssd_milli,
+            resting_hr=resting_hr,
+            sleep_hours=sleep_hours,
+            sleep_performance_pct=sleep_performance_pct,
+            recovery_score=recovery_score,
+            avg_strain=avg_strain,
+            workout_kcal=workout_kcal,
+            workout_count=workout_count,
+            body_weight_kg=body_weight_kg,
+        )
+        return {"ok": True, "sample_date": sample_date, "source": source}
 
     def _register_domain_in_tx(
         self,
@@ -330,7 +407,7 @@ class DataEntryService:
                 provenance={"reason": conf_reason, "dyn_row": pending_row_id},
             )
 
-        return {
+        result = {
             "status": "committed",
             "domain_slug": slug,
             "confidence": conf,
@@ -338,6 +415,12 @@ class DataEntryService:
             "dynamic_row_id": pending_row_id,
             "raw_event_id": raw_id,
         }
+        result["health_db_mirror"] = mirror_ingest_payload_to_biometric(
+            payload=merged,
+            source=src,
+            occurred_at=recorded_at,
+        )
+        return result
 
     def ingest(
         self,
@@ -449,7 +532,7 @@ class DataEntryService:
                 confidence=conf,
                 provenance={"reason": conf_reason, "dyn_row": dyn_id},
             )
-        return {
+        result = {
             "status": "committed",
             "domain_slug": slug,
             "confidence": conf,
@@ -457,3 +540,429 @@ class DataEntryService:
             "dynamic_row_id": dyn_id,
             "raw_event_id": raw_id,
         }
+        result["health_db_mirror"] = mirror_ingest_payload_to_biometric(
+            payload=payload,
+            source=source_n,
+            occurred_at=at,
+        )
+        return result
+
+    def ensure_optional_seed_domains(self) -> dict[str, Any]:
+        """Idempotent: register ``food_log`` with meal-oriented schema hints if absent."""
+        with self.db.transaction() as cur:
+            if cur.execute(
+                "SELECT 1 FROM tracking_registry WHERE slug = ?",
+                ("food_log",),
+            ).fetchone():
+                return {"food_log_seeded": False}
+            self._register_domain_in_tx(cur, "Food log", list(FOOD_LOG_SEED_SCHEMA_HINT))
+        return {"food_log_seeded": True}
+
+    def _canonical_domain_slug(self, cur, slug_or_name: str) -> str | None:
+        row = self.resolve_domain_row(cur, slug_or_name.strip())
+        if not row:
+            return None
+        slug = str(row["slug"])
+        if not _DYN_SLUG_OK.match(slug):
+            return None
+        return slug
+
+    def build_data_entry_catalog(self) -> dict[str, Any]:
+        hp = self.settings.resolved_health_db()
+        hp_ex = hp.is_file()
+        h_tables = sqlite_tables_with_counts(hp) if hp_ex else []
+        meals_tbl = next((t for t in h_tables if t["name"] == "meals"), None)
+        bio_tbl = next((t for t in h_tables if t["name"] == "biometric_samples"), None)
+
+        domains: list[dict[str, Any]] = []
+        with self.db.transaction() as cur:
+            regs = cur.execute(
+                """
+                SELECT id, slug, display_name, schema_hint_json, created_at
+                FROM tracking_registry
+                ORDER BY slug
+                """,
+            ).fetchall()
+            for reg in regs:
+                slug = str(reg["slug"])
+                if not _DYN_SLUG_OK.match(slug):
+                    continue
+                self.db.ensure_dynamic_table(slug)
+                table = f"evt_dyn_{slug}"
+                cnt = int(cur.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                mm = cur.execute(
+                    f"SELECT MIN(recorded_at), MAX(recorded_at) FROM {table}",
+                ).fetchone()
+                src_rows = cur.execute(
+                    f"SELECT source, COUNT(*) AS n FROM {table} GROUP BY source ORDER BY n DESC",
+                ).fetchall()
+                sources = [{"source": str(r["source"]), "count": int(r["n"])} for r in src_rows]
+                raw_c = int(
+                    cur.execute(
+                        "SELECT COUNT(*) FROM raw_events WHERE domain_slug = ?",
+                        (slug,),
+                    ).fetchone()[0],
+                )
+                schema_hint = json.loads(reg["schema_hint_json"] or "[]")
+                domains.append(
+                    {
+                        "slug": slug,
+                        "display_name": reg["display_name"],
+                        "schema_hint": schema_hint,
+                        "created_at": reg["created_at"],
+                        "dynamic_table": table,
+                        "row_count": cnt,
+                        "earliest_recorded_at": mm[0],
+                        "latest_recorded_at": mm[1],
+                        "sources": sources,
+                        "raw_events_count": raw_c,
+                    },
+                )
+
+        return {
+            "managed_by_agent": "data-entry",
+            "domains": domains,
+            "health_store": {
+                "path": str(hp.resolve()),
+                "exists": hp_ex,
+                "tables": h_tables,
+                "meals_table_rows": int(meals_tbl["row_count"]) if meals_tbl else None,
+                "biometric_samples_rows": int(bio_tbl["row_count"]) if bio_tbl else None,
+            },
+        }
+
+    def _fetch_primary_raw_for_dyn_row(self, cur, *, domain_slug: str, dyn_row_id: str) -> dict[str, Any] | None:
+        row = cur.execute(
+            """
+            SELECT id, occurred_at, source, event_type, payload_json, confidence, provenance_json
+            FROM raw_events
+            WHERE domain_slug = ?
+              AND json_extract(provenance_json, '$.dyn_row') = ?
+            ORDER BY datetime(occurred_at) DESC
+            LIMIT 1
+            """,
+            (domain_slug, dyn_row_id),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        pj = d.pop("payload_json", None)
+        pr = d.pop("provenance_json", None)
+        payload: dict[str, Any] = {}
+        if isinstance(pj, str):
+            try:
+                payload = dict(json.loads(pj))
+            except json.JSONDecodeError:
+                payload = {}
+        prov: dict[str, Any] = {}
+        if isinstance(pr, str):
+            try:
+                prov = dict(json.loads(pr))
+            except json.JSONDecodeError:
+                prov = {}
+        d["payload"] = payload
+        d["provenance"] = prov
+        return d
+
+    def list_domain_rows(
+        self,
+        *,
+        slug: str,
+        limit: int | None = None,
+        since: str | None = None,
+    ) -> dict[str, Any]:
+        cap = clamp_query_limit(limit)
+        since_s = since.strip() if isinstance(since, str) and since.strip() else None
+        out_rows: list[dict[str, Any]] = []
+        with self.db.transaction() as cur:
+            canon = self._canonical_domain_slug(cur, slug)
+            if not canon:
+                raise ValueError("unknown_domain")
+            self.db.ensure_dynamic_table(canon)
+            table = f"evt_dyn_{canon}"
+            if since_s:
+                dyn = cur.execute(
+                    f"""
+                    SELECT id, recorded_at, payload_json, confidence, source, provenance_json, clarification_pending
+                    FROM {table}
+                    WHERE recorded_at >= ?
+                    ORDER BY datetime(recorded_at) DESC
+                    LIMIT ?
+                    """,
+                    (since_s, cap),
+                ).fetchall()
+            else:
+                dyn = cur.execute(
+                    f"""
+                    SELECT id, recorded_at, payload_json, confidence, source, provenance_json, clarification_pending
+                    FROM {table}
+                    ORDER BY datetime(recorded_at) DESC
+                    LIMIT ?
+                    """,
+                    (cap,),
+                ).fetchall()
+            for r in dyn:
+                payload: dict[str, Any] = {}
+                try:
+                    payload = dict(json.loads(r["payload_json"] or "{}"))
+                except json.JSONDecodeError:
+                    payload = {}
+                prov_obj: dict[str, Any] = {}
+                try:
+                    prov_obj = dict(json.loads(r["provenance_json"] or "{}"))
+                except json.JSONDecodeError:
+                    prov_obj = {}
+                raw_link = self._fetch_primary_raw_for_dyn_row(
+                    cur,
+                    domain_slug=canon,
+                    dyn_row_id=str(r["id"]),
+                )
+                out_rows.append(
+                    {
+                        "id": r["id"],
+                        "recorded_at": r["recorded_at"],
+                        "payload": payload,
+                        "confidence": r["confidence"],
+                        "source": r["source"],
+                        "provenance": prov_obj,
+                        "clarification_pending": bool(r["clarification_pending"]),
+                        "raw_event": raw_link,
+                    },
+                )
+        return {
+            "domain_slug": canon,
+            "limit": cap,
+            "since": since_s,
+            "rows": out_rows,
+        }
+
+    def list_raw_events_filtered(
+        self,
+        *,
+        domain: str | None,
+        source: str | None,
+        since: str | None,
+        limit: int | None,
+    ) -> dict[str, Any]:
+        cap = clamp_query_limit(limit)
+        dom_slug: str | None = None
+        if domain and str(domain).strip():
+            with self.db.transaction() as cur:
+                dom_slug = self._canonical_domain_slug(cur, str(domain).strip())
+                if not dom_slug:
+                    raise ValueError("unknown_domain")
+        src_f = str(source).strip() if source and str(source).strip() else None
+        since_s = since.strip() if isinstance(since, str) and since.strip() else None
+
+        where: list[str] = []
+        params: list[Any] = []
+        if dom_slug:
+            where.append("domain_slug = ?")
+            params.append(dom_slug)
+        if src_f:
+            where.append("source = ?")
+            params.append(src_f)
+        if since_s:
+            where.append("occurred_at >= ?")
+            params.append(since_s)
+        wh = (" WHERE " + " AND ".join(where)) if where else ""
+        sql = f"""
+            SELECT id, occurred_at, source, event_type, domain_slug, payload_json, confidence, provenance_json
+            FROM raw_events
+            {wh}
+            ORDER BY datetime(occurred_at) DESC
+            LIMIT ?
+        """
+        params.append(cap)
+        items: list[dict[str, Any]] = []
+        with self.db.transaction() as cur:
+            rows = cur.execute(sql, tuple(params)).fetchall()
+        for r in rows:
+            d = dict(r)
+            pj = d.pop("payload_json", None)
+            pr = d.pop("provenance_json", None)
+            payload: dict[str, Any] = {}
+            if isinstance(pj, str):
+                try:
+                    payload = dict(json.loads(pj))
+                except json.JSONDecodeError:
+                    payload = {}
+            prov: dict[str, Any] = {}
+            if isinstance(pr, str):
+                try:
+                    prov = dict(json.loads(pr))
+                except json.JSONDecodeError:
+                    prov = {}
+            d["payload"] = payload
+            d["provenance"] = prov
+            items.append(d)
+        return {"items": items, "limit": cap, "domain": dom_slug, "source": src_f, "since": since_s}
+
+    def build_insight_context(
+        self,
+        *,
+        days: int | None = None,
+        recent_events_limit: int | None = None,
+        meals_row_limit: int | None = None,
+    ) -> dict[str, Any]:
+        d_days = clamp_insight_days(days)
+        ev_lim = clamp_query_limit(recent_events_limit, default=50)
+        meal_lim = clamp_query_limit(meals_row_limit, default=50, max_lim=MAX_QUERY_LIMIT)
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=d_days)
+        cutoff_iso = cutoff_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+        profile: dict[str, Any] = {}
+        goals_slim: list[dict[str, Any]] = []
+        with self.db.transaction() as cur:
+            profile = fetch_profile(cur)
+            g_rows = cur.execute(
+                """
+                SELECT id, title, created_at
+                FROM goals
+                WHERE deleted_at IS NULL
+                ORDER BY datetime(created_at) DESC
+                LIMIT 50
+                """,
+            ).fetchall()
+            goals_slim = [{"id": r["id"], "title": r["title"], "created_at": r["created_at"]} for r in g_rows]
+
+            domain_summaries: list[dict[str, Any]] = []
+            regs = cur.execute(
+                "SELECT slug, display_name FROM tracking_registry ORDER BY slug",
+            ).fetchall()
+            for reg in regs:
+                slug = str(reg["slug"])
+                if not _DYN_SLUG_OK.match(slug):
+                    continue
+                self.db.ensure_dynamic_table(slug)
+                table = f"evt_dyn_{slug}"
+                dyn_in = cur.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE recorded_at >= ?",
+                    (cutoff_iso,),
+                ).fetchone()[0]
+                raw_in = cur.execute(
+                    """
+                    SELECT COUNT(*) FROM raw_events
+                    WHERE domain_slug = ? AND occurred_at >= ?
+                    """,
+                    (slug, cutoff_iso),
+                ).fetchone()[0]
+                domain_summaries.append(
+                    {
+                        "slug": slug,
+                        "display_name": reg["display_name"],
+                        "dynamic_rows_in_window": int(dyn_in),
+                        "raw_events_in_window": int(raw_in),
+                    },
+                )
+
+            recent = cur.execute(
+                """
+                SELECT id, occurred_at, source, event_type, domain_slug, payload_json, confidence, provenance_json
+                FROM raw_events
+                WHERE occurred_at >= ?
+                ORDER BY datetime(occurred_at) DESC
+                LIMIT ?
+                """,
+                (cutoff_iso, ev_lim),
+            ).fetchall()
+            recent_items: list[dict[str, Any]] = []
+            for r in recent:
+                d = dict(r)
+                pj = d.pop("payload_json", None)
+                pr = d.pop("provenance_json", None)
+                payload: dict[str, Any] = {}
+                if isinstance(pj, str):
+                    try:
+                        payload = dict(json.loads(pj))
+                    except json.JSONDecodeError:
+                        payload = {}
+                prov: dict[str, Any] = {}
+                if isinstance(pr, str):
+                    try:
+                        prov = dict(json.loads(pr))
+                    except json.JSONDecodeError:
+                        prov = {}
+                d["payload"] = payload
+                d["provenance"] = prov
+                recent_items.append(d)
+
+            src_tot = cur.execute(
+                """
+                SELECT source, COUNT(*) AS n
+                FROM raw_events
+                WHERE occurred_at >= ?
+                GROUP BY source
+                ORDER BY n DESC
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+            by_source = {str(r["source"]): int(r["n"]) for r in src_tot}
+
+            dom_tot = cur.execute(
+                """
+                SELECT domain_slug, COUNT(*) AS n
+                FROM raw_events
+                WHERE occurred_at >= ? AND domain_slug IS NOT NULL AND domain_slug != ''
+                GROUP BY domain_slug
+                ORDER BY n DESC
+                LIMIT 40
+                """,
+                (cutoff_iso,),
+            ).fetchall()
+            by_domain = {str(r["domain_slug"]): int(r["n"]) for r in dom_tot}
+
+            raw_total = cur.execute(
+                "SELECT COUNT(*) FROM raw_events WHERE occurred_at >= ?",
+                (cutoff_iso,),
+            ).fetchone()[0]
+
+            mirror_counts: dict[str, int] = {}
+            for tbl in ("whoop_sleep", "whoop_workout", "whoop_recovery", "whoop_cycle"):
+                exists = cur.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+                    (tbl,),
+                ).fetchone()
+                if not exists:
+                    mirror_counts[tbl] = 0
+                    continue
+                n = cur.execute(
+                    f"SELECT COUNT(*) FROM {tbl} WHERE fetched_at >= ?",
+                    (cutoff_iso,),
+                ).fetchone()[0]
+                mirror_counts[tbl] = int(n)
+
+        meals_ctx = health_db_meals_window(days=d_days, meals_row_limit=meal_lim)
+        bio_ctx = health_db_biometrics_window(days=d_days)
+
+        whoop_like = sum(by_source.get(s, 0) for s in ("whoop", "wearable_auto"))
+        apple_like = int(by_source.get("healthkit_export", 0))
+
+        return {
+            "managed_by_agent": "data-entry",
+            "window": {
+                "days": d_days,
+                "nemoclaw_cutoff_occurred_at": cutoff_iso,
+            },
+            "profile": profile,
+            "goals": goals_slim,
+            "domains_summary": domain_summaries,
+            "recent_events": recent_items,
+            "nemoclaw_raw_events": {
+                "total_in_window": int(raw_total),
+                "by_source": by_source,
+                "by_domain_top": by_domain,
+                "whoop_related_raw_total": int(whoop_like),
+                "apple_health_export_raw_total": int(apple_like),
+            },
+            "whoop_mirror_row_counts_in_window": mirror_counts,
+            "health_db": {
+                "meals": meals_ctx,
+                "biometrics": bio_ctx,
+            },
+        }
+
+    def meals_window_payload(self, *, days: int | None = None, limit: int | None = None) -> dict[str, Any]:
+        d = clamp_insight_days(days)
+        lim = clamp_query_limit(limit, default=50)
+        return {"managed_by_agent": "data-entry", "days": d, **health_db_meals_window(days=d, meals_row_limit=lim)}
