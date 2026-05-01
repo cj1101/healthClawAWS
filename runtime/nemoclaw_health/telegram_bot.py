@@ -16,6 +16,7 @@ import sys
 import time
 from html import escape
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from telegram import Update
@@ -114,12 +115,41 @@ async def _call_chat(message: str, api_base: str, bearer: str | None) -> dict:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
+    # #region agent log
+    try:
+        from nemoclaw_health.debug_ndjson import acd858_log
+
+        host = urlparse(api_base).hostname or api_base[:80]
+        acd858_log(
+            "telegram_bot.py:_call_chat",
+            "before POST /v1/chat",
+            "H-C",
+            api_host=host,
+            bearer_len=len(bearer) if bearer else 0,
+            message_len=len(message),
+        )
+    except Exception:
+        pass
+    # #endregion
     async with httpx.AsyncClient(timeout=180.0) as client:
         r = await client.post(
             f"{api_base.rstrip('/')}/v1/chat",
             json={"message": message},
             headers=headers,
         )
+        # #region agent log
+        try:
+            from nemoclaw_health.debug_ndjson import acd858_log
+
+            acd858_log(
+                "telegram_bot.py:_call_chat",
+                "after POST /v1/chat",
+                "H-D",
+                http_status=r.status_code,
+            )
+        except Exception:
+            pass
+        # #endregion
         if r.status_code == 401:
             raise RuntimeError(
                 "API returned 401. If the dashboard password is set, define "
@@ -225,6 +255,20 @@ def main() -> None:
         },
         "H1",
     )
+    try:
+        from nemoclaw_health.debug_ndjson import acd858_log
+
+        raw_b = os.environ.get("NEMOWLAW_CHAT_BEARER_TOKEN", "") or ""
+        acd858_log(
+            "telegram_bot.py:main",
+            "bot startup env",
+            "H-C",
+            bearer_len=len(raw_b.strip()),
+            api_host=urlparse(api_base).hostname or "",
+            allowed_count=len(allowed),
+        )
+    except Exception:
+        pass
     # #endregion
     logger.info(
         "Telegram bot config: NEMOWLAW_CHAT_BEARER_TOKEN=%s, api_base=%s",
