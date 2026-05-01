@@ -9,13 +9,10 @@ Env:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
-import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import httpx
 from telegram import Update
@@ -61,27 +58,6 @@ def _load_dotenv_from_repo() -> None:
             os.environ[key] = str(raw_file).strip()
 
 
-# #region agent log
-def _agent_debug_log(message: str, data: dict, hypothesis_id: str) -> None:
-    try:
-        log_path = _repo_root() / "debug-ab8304.log"
-        payload = {
-            "sessionId": "ab8304",
-            "hypothesisId": hypothesis_id,
-            "location": "telegram_bot.py",
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload) + "\n")
-    except OSError:
-        pass
-
-
-# #endregion
-
-
 def _allowed_ids() -> frozenset[int]:
     """Parse TELEGRAM_ALLOWED_USER_IDS (comma-separated). Each entry must be a numeric user id.
 
@@ -114,41 +90,12 @@ async def _call_chat(message: str, api_base: str, bearer: str | None) -> dict:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
-    # #region agent log
-    try:
-        from nemoclaw_health.debug_ndjson import acd858_log
-
-        host = urlparse(api_base).hostname or api_base[:80]
-        acd858_log(
-            "telegram_bot.py:_call_chat",
-            "before POST /v1/chat",
-            "H-C",
-            api_host=host,
-            bearer_len=len(bearer) if bearer else 0,
-            message_len=len(message),
-        )
-    except Exception:
-        pass
-    # #endregion
     async with httpx.AsyncClient(timeout=180.0) as client:
         r = await client.post(
             f"{api_base.rstrip('/')}/v1/chat",
             json={"message": message},
             headers=headers,
         )
-        # #region agent log
-        try:
-            from nemoclaw_health.debug_ndjson import acd858_log
-
-            acd858_log(
-                "telegram_bot.py:_call_chat",
-                "after POST /v1/chat",
-                "H-D",
-                http_status=r.status_code,
-            )
-        except Exception:
-            pass
-        # #endregion
         if r.status_code == 401:
             raise RuntimeError(
                 "API returned 401. If the dashboard password is set, define "
@@ -209,26 +156,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not isinstance(reply, str):
         reply = str(data)
 
-    parts = _chunks(reply)
-    for raw_part in parts:
-        # Plain text only: Telegram Bot API "HTML" parse_mode does not support <br> or <br/>
-        # (BadRequest: unsupported start tag "br" / "br/"). Newlines are fine without parse_mode.
+    for raw_part in _chunks(reply):
+        # Plain text: Telegram Bot API HTML mode does not support <br> / <br/>.
         safe = raw_part.replace("\x00", "")
         await update.message.reply_text(safe)
-    # #region agent log
-    try:
-        from nemoclaw_health.debug_ndjson import acd858_log
-
-        acd858_log(
-            "telegram_bot.py:on_text",
-            "reply_chunks_sent_ok",
-            "H-verify",
-            runId="post-fix",
-            chunk_count=len(parts),
-        )
-    except Exception:
-        pass
-    # #endregion
 
 
 def main() -> None:
@@ -236,15 +167,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         level=logging.INFO,
     )
-    env_path = _repo_root() / ".env"
     _load_dotenv_from_repo()
-    # #region agent log
-    _agent_debug_log(
-        "after_load_dotenv",
-        {"env_file_exists": env_path.is_file()},
-        "H1",
-    )
-    # #endregion
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         logger.error("Set TELEGRAM_BOT_TOKEN")
@@ -262,30 +185,6 @@ def main() -> None:
 
     api_base = os.environ.get("TELEGRAM_NEMOWLAW_API_BASE", "http://127.0.0.1:8000").strip()
     bearer = os.environ.get("NEMOWLAW_CHAT_BEARER_TOKEN", "").strip() or None
-    # #region agent log
-    _agent_debug_log(
-        "startup_env",
-        {
-            "bearer_set": bearer is not None,
-            "allowed_count": len(allowed),
-        },
-        "H1",
-    )
-    try:
-        from nemoclaw_health.debug_ndjson import acd858_log
-
-        raw_b = os.environ.get("NEMOWLAW_CHAT_BEARER_TOKEN", "") or ""
-        acd858_log(
-            "telegram_bot.py:main",
-            "bot startup env",
-            "H-C",
-            bearer_len=len(raw_b.strip()),
-            api_host=urlparse(api_base).hostname or "",
-            allowed_count=len(allowed),
-        )
-    except Exception:
-        pass
-    # #endregion
     logger.info(
         "Telegram bot config: NEMOWLAW_CHAT_BEARER_TOKEN=%s, api_base=%s",
         "set" if bearer else "unset",

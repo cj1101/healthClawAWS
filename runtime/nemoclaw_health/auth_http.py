@@ -33,22 +33,6 @@ def install_dashboard_auth(app: Any, settings: Settings) -> None:
             if not settings.dashboard_password:
                 return await call_next(request)
             p = request.url.path
-            # #region agent log
-            if p == "/v1/chat" and request.method == "POST":
-                try:
-                    from nemoclaw_health.debug_ndjson import acd858_log
-
-                    ctl = (settings.chat_bearer_token or "").strip()
-                    acd858_log(
-                        "auth_http.py:dispatch",
-                        "POST /v1/chat entry",
-                        "H-A",
-                        chat_token_len=len(ctl),
-                        dashboard_pw_set=True,
-                    )
-                except Exception:
-                    pass
-            # #endregion
             if p == "/healthz":
                 return await call_next(request)
             if p.startswith("/v1/connectors/whoop/callback"):
@@ -77,49 +61,18 @@ def install_dashboard_auth(app: Any, settings: Settings) -> None:
             ):
                 raw = request.headers.get("authorization") or ""
                 parts = raw.split(None, 1)
-                digest_ok = (
+                if (
                     len(parts) == 2
                     and parts[0].lower() == "bearer"
                     and secrets.compare_digest(
                         parts[1].strip(),
                         settings.chat_bearer_token.strip(),
                     )
-                )
-                # #region agent log
-                try:
-                    from nemoclaw_health.debug_ndjson import acd858_log
-
-                    acd858_log(
-                        "auth_http.py:chat_bearer",
-                        "POST /v1/chat bearer gate",
-                        "H-B",
-                        chat_token_len=len(settings.chat_bearer_token.strip()),
-                        auth_header_nonempty=bool(raw.strip()),
-                        scheme_bearer=len(parts) == 2 and parts[0].lower() == "bearer",
-                        digest_ok=digest_ok,
-                    )
-                except Exception:
-                    pass
-                # #endregion
-                if digest_ok:
+                ):
                     return await call_next(request)
             if p.startswith("/v1/"):
                 sess = request.scope.get("session")
                 if not isinstance(sess, dict) or not sess.get("authenticated"):
-                    # #region agent log
-                    if p == "/v1/chat" and request.method == "POST":
-                        try:
-                            from nemoclaw_health.debug_ndjson import acd858_log
-
-                            acd858_log(
-                                "auth_http.py:session_401",
-                                "401 via session gate (missing/wrong session or fell through)",
-                                "H-E",
-                                path=p,
-                            )
-                        except Exception:
-                            pass
-                    # #endregion
                     return JSONResponse({"detail": "Not authenticated"}, status_code=401)
             return await call_next(request)
 
