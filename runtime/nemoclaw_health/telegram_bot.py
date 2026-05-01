@@ -14,7 +14,6 @@ import logging
 import os
 import sys
 import time
-from html import escape
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -212,9 +211,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     parts = _chunks(reply)
     for raw_part in parts:
-        # Telegram HTML mode accepts <br>, not XHTML <br/> (BadRequest: unsupported start tag "br/").
-        safe = escape(raw_part).replace("\n", "<br>")
-        await update.message.reply_text(safe, parse_mode="HTML")
+        # Plain text only: Telegram Bot API "HTML" parse_mode does not support <br> or <br/>
+        # (BadRequest: unsupported start tag "br" / "br/"). Newlines are fine without parse_mode.
+        safe = raw_part.replace("\x00", "")
+        await update.message.reply_text(safe)
     # #region agent log
     try:
         from nemoclaw_health.debug_ndjson import acd858_log
