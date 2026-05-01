@@ -6,9 +6,21 @@ WHOOP_OAUTH_AUTH_DEFAULT = "https://api.prod.whoop.com/oauth/oauth2/auth"
 WHOOP_OAUTH_TOKEN_DEFAULT = "https://api.prod.whoop.com/oauth/oauth2/token"
 WHOOP_API_BASE_DEFAULT = "https://api.prod.whoop.com/developer"
 
+# Uvicorn WorkingDirectory is often ``runtime/``; canonical deploy ``.env`` lives at repo root.
+_SETTINGS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT_ENV = _SETTINGS_DIR.parent.parent / ".env"
+_RUNTIME_ENV = _SETTINGS_DIR.parent / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="NEMOWLAW_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="NEMOWLAW_",
+        env_file=(
+            _REPO_ROOT_ENV,
+            _RUNTIME_ENV,
+        ),
+        extra="ignore",
+    )
 
     data_dir: Path = Path(__file__).resolve().parent.parent / "data"
     sqlite_path: Path | None = None

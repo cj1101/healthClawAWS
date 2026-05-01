@@ -9,10 +9,13 @@ Env:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
+import time
 from html import escape
+from pathlib import Path
 
 import httpx
 from telegram import Update
@@ -23,6 +26,60 @@ logger = logging.getLogger(__name__)
 
 # Under Telegram’s 4096 limit; UTF-8 safe for most alphabets.
 _CHUNK = 3800
+
+
+def _repo_root() -> Path:
+    """Project root (parent of ``runtime/``) — same layout as ``deploy/ec2`` systemd units."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _load_dotenv_from_repo() -> None:
+    """Populate ``os.environ`` from repo ``.env`` when keys are missing or empty-string.
+
+    ``EnvironmentFile`` can leave a key present but empty; ``load_dotenv(override=False)`` would
+    not replace it — we backfill those from the file for the vars this process needs.
+    """
+    try:
+        from dotenv import dotenv_values, load_dotenv
+    except ImportError:
+        return
+    path = _repo_root() / ".env"
+    if not path.is_file():
+        return
+    load_dotenv(path, override=False)
+    file_vars = dotenv_values(path)
+    for key in (
+        "NEMOWLAW_CHAT_BEARER_TOKEN",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_ALLOWED_USER_IDS",
+        "TELEGRAM_NEMOWLAW_API_BASE",
+    ):
+        raw_file = file_vars.get(key)
+        if raw_file is None or str(raw_file).strip() == "":
+            continue
+        if not (os.environ.get(key) or "").strip():
+            os.environ[key] = str(raw_file).strip()
+
+
+# #region agent log
+def _agent_debug_log(message: str, data: dict, hypothesis_id: str) -> None:
+    try:
+        log_path = _repo_root() / "debug-ab8304.log"
+        payload = {
+            "sessionId": "ab8304",
+            "hypothesisId": hypothesis_id,
+            "location": "telegram_bot.py",
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except OSError:
+        pass
+
+
+# #endregion
 
 
 def _allowed_ids() -> frozenset[int]:
@@ -133,6 +190,15 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         level=logging.INFO,
     )
+    env_path = _repo_root() / ".env"
+    _load_dotenv_from_repo()
+    # #region agent log
+    _agent_debug_log(
+        "after_load_dotenv",
+        {"env_file_exists": env_path.is_file()},
+        "H1",
+    )
+    # #endregion
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
         logger.error("Set TELEGRAM_BOT_TOKEN")
@@ -150,6 +216,21 @@ def main() -> None:
 
     api_base = os.environ.get("TELEGRAM_NEMOWLAW_API_BASE", "http://127.0.0.1:8000").strip()
     bearer = os.environ.get("NEMOWLAW_CHAT_BEARER_TOKEN", "").strip() or None
+    # #region agent log
+    _agent_debug_log(
+        "startup_env",
+        {
+            "bearer_set": bearer is not None,
+            "allowed_count": len(allowed),
+        },
+        "H1",
+    )
+    # #endregion
+    logger.info(
+        "Telegram bot config: NEMOWLAW_CHAT_BEARER_TOKEN=%s, api_base=%s",
+        "set" if bearer else "unset",
+        api_base,
+    )
 
     app = (
         Application.builder()
