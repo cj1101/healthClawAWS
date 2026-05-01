@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import secrets
 import time
 import urllib.parse
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -38,33 +36,6 @@ class WhoopOAuthError(RuntimeError):
 
 class WhoopStateError(WhoopOAuthError):
     pass
-
-
-# #region agent log
-def _debug_dd4749_whoop_redirect(
-    *,
-    hypothesis_id: str,
-    message: str,
-    data: dict[str, Any],
-) -> None:
-    try:
-        log_path = Path(__file__).resolve().parents[3] / ".cursor" / "debug-dd4749.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        payload: dict[str, Any] = {
-            "sessionId": "dd4749",
-            "hypothesisId": hypothesis_id,
-            "location": "nemoclaw_health.connectors.whoop_oauth:resolve_whoop_redirect_uri",
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with log_path.open("a", encoding="utf-8") as lf:
-            lf.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-
-
-# #endregion
 
 
 def callback_url_from_request(request: Request) -> str:
@@ -120,16 +91,6 @@ def resolve_whoop_redirect_uri(settings: Settings, request: Request) -> tuple[st
     except ValueError:
         return derived, "derived"
     if host == "your_domain":
-        # #region agent log
-        _debug_dd4749_whoop_redirect(
-            hypothesis_id="H3_placeholder_causes_dashboard_mismatch",
-            message="your_domain_placeholder_blocked",
-            data={
-                "env_redirect_host": host,
-                "would_have_derived_redirect": derived,
-            },
-        )
-        # #endregion
         raise WhoopConfigError(
             "NEMOWLAW_WHOOP_REDIRECT_URI still contains the YOUR_DOMAIN placeholder "
             "(hostname is literally your_domain after parsing). Replace it with the exact "

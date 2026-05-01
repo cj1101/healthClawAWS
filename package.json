@@ -2,11 +2,11 @@
   "name": "healthclaw-aws",
   "private": true,
   "type": "module",
-  "description": "Nemoclaw Health Phase 0 contracts + validators",
+  "description": "Nemoclaw Health AWS runtime, contracts, and validators",
   "scripts": {
     "validate:phase0": "node scripts/validate-phase0.mjs",
-    "validate:phase1": "npm run validate:phase0 && python -m pytest tests -q",
-    "validate:phase2": "npm run validate:phase0 && python -m pytest tests -q"
+    "validate:phase1": "npm run validate:phase0 && python3 -m pytest tests -q",
+    "validate:phase2": "npm run validate:phase0 && python3 -m pytest tests -q"
   },
   "devDependencies": {
     "ajv": "^8.17.1",

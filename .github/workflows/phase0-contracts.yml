@@ -1,4 +1,4 @@
-name: Phase 0 contracts
+name: Validate Nemoclaw Health
 
 on:
   push:
@@ -17,8 +17,16 @@ jobs:
           node-version: "22"
           cache: npm
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
       - name: npm ci
         run: npm ci
 
-      - name: Nemoclaw Phase 0 validation
-        run: npm run validate:phase0
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Nemoclaw validation
+        run: npm run validate:phase2

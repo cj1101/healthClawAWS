@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
-import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -40,59 +38,6 @@ def _whoop_callback_browser_flow(request: Request) -> bool:
     return "text/html" in (request.headers.get("accept") or "").lower()
 
 
-# #region agent log
-_DEBUG_DD4749 = Path(__file__).resolve().parents[2] / ".cursor" / "debug-dd4749.log"
-
-
-def _debug_dd4749_log(
-    *,
-    hypothesis_id: str,
-    location: str,
-    message: str,
-    data: dict[str, Any],
-    run_id: str | None = None,
-) -> None:
-    try:
-        _DEBUG_DD4749.parent.mkdir(parents=True, exist_ok=True)
-        payload: dict[str, Any] = {
-            "sessionId": "dd4749",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        if run_id:
-            payload["runId"] = run_id
-        with _DEBUG_DD4749.open("a", encoding="utf-8") as lf:
-            lf.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-
-
-def _agent_whoop_oauth_debug(
-    *,
-    hypothesis_id: str,
-    message: str,
-    data: dict[str, Any],
-) -> None:
-    try:
-        log_path = Path(__file__).resolve().parents[2] / "debug-75c232.log"
-        payload = {
-            "sessionId": "75c232",
-            "hypothesisId": hypothesis_id,
-            "location": "nemoclaw_health.app:whoop_authorize_url",
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with log_path.open("a", encoding="utf-8") as lf:
-            lf.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-
-
-# #endregion
 from nemoclaw_health.data_entry import DataEntryService
 from nemoclaw_health.debug_service import (
     analyze_environment,
@@ -588,39 +533,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def whoop_authorize_url(request: Request, s: Settings = Depends(svc_settings)):
         db = get_db(s)
         try:
-            env_rd = (s.whoop_redirect_uri or "").strip()
-            derived_rd = callback_url_from_request(request)
             effective_redirect, redirect_provenance = resolve_whoop_redirect_uri(s, request)
-            # #region agent log
-            _agent_whoop_oauth_debug(
-                hypothesis_id="H1_H2_H3",
-                message="whoop_authorize_redirect_inputs",
-                data={
-                    "redirect_provenance": redirect_provenance,
-                    "env_redirect_set": bool(env_rd),
-                    "env_redirect": env_rd if env_rd else None,
-                    "derived_redirect": derived_rd,
-                    "effective_redirect": effective_redirect,
-                    "env_equals_effective": env_rd == effective_redirect,
-                    "forwarded_proto": (request.headers.get("x-forwarded-proto") or "")[:80],
-                    "forwarded_host": (request.headers.get("x-forwarded-host") or "")[:120],
-                    "host_header": (request.headers.get("host") or "")[:120],
-                    "request_base_url": str(request.base_url).rstrip("/"),
-                },
-            )
-            # #endregion
             if whoop_http_redirect_disallowed_for_host(effective_redirect):
-                # #region agent log
-                _debug_dd4749_log(
-                    hypothesis_id="H4_http_public_blocked_at_authorize",
-                    location="nemoclaw_health.app:whoop_authorize_url",
-                    message="blocked_authorize_whoop_requires_https_for_public_redirect",
-                    data={
-                        "effective_redirect": effective_redirect,
-                        "redirect_provenance": redirect_provenance,
-                    },
-                )
-                # #endregion
                 raise WhoopConfigError(
                     "WHOOP rejects http:// redirect_uri for this host (only localhost-style "
                     "hosts may use http). Use https://..., set NEMOWLAW_WHOOP_REDIRECT_URI to the exact "
@@ -629,32 +543,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     f"Current redirect_uri resolves to: {effective_redirect}",
                 )
             url = build_authorization_url(db, s, redirect_uri=effective_redirect)
-            # #region agent log
-            q = urllib.parse.urlparse(url).query
-            rd_in_url = (urllib.parse.parse_qs(q).get("redirect_uri") or [""])[0]
-            _agent_whoop_oauth_debug(
-                hypothesis_id="H4_H5",
-                message="whoop_authorize_url_built",
-                data={
-                    "effective_equals_embedded": rd_in_url == effective_redirect,
-                    "effective_redirect": effective_redirect,
-                    "embedded_redirect_uri_decoded": rd_in_url,
-                    "auth_url_host": urllib.parse.urlparse(url).netloc[:120],
-                },
-            )
-            # #endregion
-            _debug_dd4749_log(
-                hypothesis_id="H1_https_required",
-                location="nemoclaw_health.app:whoop_authorize_url",
-                message="redirect_uri_whoop_https_policy",
-                data={
-                    "effective_redirect": effective_redirect,
-                    "whoop_disallows_http_public": whoop_http_redirect_disallowed_for_host(
-                        effective_redirect,
-                    ),
-                    "redirect_provenance": redirect_provenance,
-                },
-            )
             return {
                 "authorization_url": url,
                 "redirect_uri": effective_redirect,

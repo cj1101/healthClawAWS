@@ -1,4 +1,4 @@
-## EC2 runtime & debugging (`healthClaw` on Ubuntu)
+## EC2 runtime & debugging (`healthClawAWS` on Ubuntu)
 
 Canonical flow: **`GitHub ← → laptop ← → EC2`**. Prefer **committed** JSON contracts and reproducible **`npm run validate:phase0`** on both laptop and EC2.
 
@@ -6,10 +6,11 @@ Canonical flow: **`GitHub ← → laptop ← → EC2`**. Prefer **committed** JS
 
 - Git
 - Node.js ≥ 18 (use [nvm](https://github.com/nvm-sh/nvm) on Ubuntu) for Phase 0 validators
-- SSH key with correct permissions locally (do **not** commit `.pem`; path on Windows is yours only):
+- Python 3.11+ for the FastAPI runtime and tests
+- SSH key with correct permissions locally (do **not** commit `.pem`; replace the placeholders with your own key path and instance address):
 
 ```powershell
-ssh -i "C:\Users\charl\openclawKey.pem" ubuntu@ec2-44-200-84-118.compute-1.amazonaws.com
+ssh -i "C:\path\to\your-key.pem" ubuntu@YOUR_EC2_PUBLIC_HOSTNAME
 ```
 
 On Linux/macOS enforce key perms (`chmod 400 key.pem`) before SSH.
@@ -19,7 +20,7 @@ On Linux/macOS enforce key perms (`chmod 400 key.pem`) before SSH.
 ```bash
 sudo apt update && sudo apt install -y git
 mkdir -p ~/healthClaw && cd ~/healthClaw
-git clone https://github.com/cj1101/healthClaw.git .
+git clone https://github.com/cj1101/healthClawAWS.git .
 # or: clone into subdir then symlink
 npm install
 npm run validate:phase0
@@ -31,7 +32,8 @@ npm run validate:phase0
 cd ~/healthClaw
 git pull
 npm ci
-npm run validate:phase0
+pip install -r requirements.txt
+npm run validate:phase2
 ```
 
 Python skill work (WHOOP ingestion, orchestration demos) expects **Python 3.11+**:
