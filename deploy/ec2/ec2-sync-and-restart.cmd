@@ -13,5 +13,5 @@ if not exist "%EC2_KEY%" (
   exit /b 1
 )
 
-ssh -i "%EC2_KEY%" -o StrictHostKeyChecking=accept-new "%EC2_USER%@%EC2_HOST%" "cd %EC2_REPO% && git pull && sudo systemctl restart nemoclaw-health"
+ssh -i "%EC2_KEY%" -o StrictHostKeyChecking=accept-new "%EC2_USER%@%EC2_HOST%" "cd %EC2_REPO% && git pull && sudo systemctl restart nemoclaw-health nemoclaw-telegram-bot"
 exit /b %ERRORLEVEL%
