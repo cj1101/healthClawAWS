@@ -85,3 +85,33 @@ def test_http_jobs_bearer_token_when_password_set(iso_test_settings):
         headers={"Authorization": "Bearer job-secret-token"},
     )
     assert ok.status_code == 200
+
+
+def test_http_chat_bearer_token_when_password_set(iso_test_settings):
+    reset_db_singleton()
+    data = iso_test_settings.data_dir
+    s = Settings(
+        data_dir=data,
+        sqlite_path=data / "t.sqlite",
+        artifact_log=data / "orchestration.jsonl",
+        raw_event_retention_days=90,
+        dashboard_password="dashboard-secret",
+        job_token="job-secret-token",
+        chat_bearer_token="chat-bearer-secret",
+    )
+    client = TestClient(create_app(s))
+    no_auth = client.post("/v1/chat", json={"message": "hello"})
+    assert no_auth.status_code == 401
+    bad = client.post(
+        "/v1/chat",
+        json={"message": "hello"},
+        headers={"Authorization": "Bearer wrong"},
+    )
+    assert bad.status_code == 401
+    ok = client.post(
+        "/v1/chat",
+        json={"message": "hello"},
+        headers={"Authorization": "Bearer chat-bearer-secret"},
+    )
+    assert ok.status_code == 200
+    assert "reply" in ok.json()

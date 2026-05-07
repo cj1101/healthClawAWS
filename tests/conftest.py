@@ -18,9 +18,6 @@ def iso_test_settings(tmp_path):
         artifact_log=data / "orchestration.jsonl",
         health_db_path=data / "health.db",
         raw_event_retention_days=90,
-        # Explicitly clear production credentials so tests always run in
-        # deterministic stub mode with no auth wall, and WHOOP tests can
-        # assert on the "not configured" code path.
         dashboard_password=None,
         session_secret=None,
         job_token=None,

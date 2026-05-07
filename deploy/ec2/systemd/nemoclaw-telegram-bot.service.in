@@ -1,0 +1,20 @@
+[Unit]
+Description=Nemoclaw Telegram bot (long polling → /v1/chat)
+Wants=network-online.target
+After=network-online.target nemoclaw-health.service
+
+[Service]
+Type=simple
+User=@DEPLOY_USER@
+Group=@DEPLOY_USER@
+WorkingDirectory=@REPO_ROOT@/runtime
+EnvironmentFile=-@REPO_ROOT@/.env
+ExecStart=@REPO_ROOT@/.venv/bin/python -m nemoclaw_health.telegram_bot
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

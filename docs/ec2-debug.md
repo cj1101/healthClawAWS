@@ -13,7 +13,7 @@ Canonical flow: **`GitHub ← → laptop ← → EC2`**. Prefer **committed** JS
 ssh -i "C:\path\to\your-key.pem" ubuntu@YOUR_EC2_PUBLIC_HOSTNAME
 ```
 
-On Linux/macOS enforce key perms (`chmod 400 key.pem`) before SSH.
+On Linux/macOS enforce key perms (`chmod 400 key.pem`) before SSH. Replace the host with your instance’s **public IPv4** or **public DNS** when it changes.
 
 ### One-time EC2 checkout
 
@@ -49,7 +49,7 @@ python health_coach.py --help
 
 1. **`validate:phase0` first** — fails fast when contracts regress (schemas, permission matrix completeness, Joy regression JSON).
 2. **Logs** — if you integrate with OpenClaw’s `workflow-events.jsonl`-style drains in later phases, `tail -f` the configured path; Phase 0 is file-based only.
-3. **Secrets on EC2** — keep `.env` and OAuth tokens outside git (see `.gitignore`); copy via `scp`/SSM, not pasted into repos.
+3. **Secrets on EC2** — keep `.env` and OAuth tokens outside git (see `.gitignore`); copy via `scp`/SSM, not pasted into repos. **`scp` must run from your laptop** (the `-i` path is a local path to your `.pem`); if you are already SSH’d into EC2, edit `~/healthClaw/.env` on the instance instead. **`TELEGRAM_ALLOWED_USER_IDS`** must be your **numeric** Telegram user id (e.g. from [@userinfobot](https://t.me/userinfobot)), not an @username. **Optional — AWS Secrets Manager:** upload the raw `.env` with [`deploy/ec2/scripts/upload-env-to-secrets-manager.sh`](deploy/ec2/scripts/upload-env-to-secrets-manager.sh) (`AWS_REGION`, `AWS_SECRETS_MANAGER_SECRET_ID`, path to `.env`). Grant the instance role `secretsmanager:GetSecretValue`, then fetch into `~/healthClaw/.env` per the script header and restart services.
 
 See also [`docs/VENDOR_ENTRYPOINTS.md`](VENDOR_ENTRYPOINTS.md).
 
@@ -108,6 +108,14 @@ Skip opening **443** on the instance if you prefer: run `cloudflared` with a tun
 | Health | `curl -sf http://127.0.0.1:8000/healthz` |
 | Manual WHOOP job | `./deploy/ec2/scripts/curl-job.sh "$(pwd)" /v1/jobs/whoop-sync` |
 | Manual prunes | `./deploy/ec2/scripts/prune-all.sh "$(pwd)"` |
+| Telegram bot logs | `journalctl -u nemoclaw-telegram-bot -f` (after `enable --now`) |
+
+**Telegram bot:** `setup-services.sh` installs `nemoclaw-telegram-bot.service` but does **not** enable it (avoids a restart loop without secrets). Add to `.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS` (your numeric user id from [@userinfobot](https://t.me/userinfobot) or `/start` on the bot), and `NEMOWLAW_CHAT_BEARER_TOKEN` when `NEMOWLAW_DASHBOARD_PASSWORD` is set. Then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now nemoclaw-telegram-bot
+```
 
 ### Telegram bot (`runtime/nemoclaw_health/telegram_bot.py`)
 
@@ -141,6 +149,7 @@ Large `export.xml` inside the ZIP can take many minutes to ingest. Site template
 ### Rollback
 
 ```bash
+sudo systemctl disable --now nemoclaw-telegram-bot.service
 sudo systemctl disable --now nemoclaw-whoop-sync.timer nemoclaw-prune.timer
 sudo systemctl disable --now nemoclaw-health
 sudo rm /etc/nginx/sites-enabled/nemoclaw-health

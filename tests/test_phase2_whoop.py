@@ -26,6 +26,71 @@ def test_whoop_authorize_requires_config(iso_test_settings):
     assert r.status_code == 503
 
 
+def test_whoop_authorize_derives_redirect_from_request(monkeypatch, iso_test_settings):
+    """Without NEMOWLAW_WHOOP_REDIRECT_URI, redirect_uri follows the browser/request origin (Starlette testclient)."""
+    monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_ID", raising=False)
+    monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("NEMOWLAW_WHOOP_REDIRECT_URI", raising=False)
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "cid",
+            "whoop_client_secret": "sec",
+            "whoop_redirect_uri": None,
+        },
+    )
+    app = create_app(cfg)
+    monkeypatch.setattr(
+        wo,
+        "token_exchange_authorization_code",
+        lambda _settings, *, code, redirect_uri, **_k: {  # noqa: ARG005
+            "access_token": "a1",
+            "refresh_token": "r1",
+            "expires_in": 3600,
+            "scope": "offline",
+        },
+    )
+    c = TestClient(app)
+    a = c.get("/v1/connectors/whoop/authorize-url")
+    assert a.status_code == 200
+    body = a.json()
+    assert body["redirect_uri"] == "http://testserver/v1/connectors/whoop/callback"
+    assert body.get("redirect_provenance") == "derived"
+    assert "dashboard_hint" in body and body["dashboard_hint"]
+    assert "redirect_uri=" in body["authorization_url"]
+
+    db = get_db(cfg)
+    with db.transaction() as cur:
+        st = fetch_connector_state(cur, "whoop")
+    oauth_state = (st.get("oauth_pending") or {}).get("state")
+    cb = c.get(
+        "/v1/connectors/whoop/callback",
+        params={"code": "c1", "state": oauth_state},
+    )
+    assert cb.status_code == 200
+
+
+def test_whoop_authorize_ignores_your_domain_placeholder(monkeypatch, iso_test_settings):
+    """ec2.env.example placeholder hostname must not be sent to WHOOP (use request-derived callback)."""
+    monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_ID", raising=False)
+    monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("NEMOWLAW_WHOOP_REDIRECT_URI", raising=False)
+    cfg = iso_test_settings.model_copy(
+        update={
+            "whoop_client_id": "cid",
+            "whoop_client_secret": "sec",
+            "whoop_redirect_uri": "https://YOUR_DOMAIN/v1/connectors/whoop/callback",
+        },
+    )
+    app = create_app(cfg)
+    c = TestClient(app)
+    a = c.get("/v1/connectors/whoop/authorize-url")
+    assert a.status_code == 200
+    body = a.json()
+    assert body["redirect_uri"] == "http://testserver/v1/connectors/whoop/callback"
+    assert body.get("redirect_provenance") == "ignored_placeholder_env"
+    assert "YOUR_DOMAIN" not in body["authorization_url"]
+
+
 def test_whoop_oauth_authorize_then_callback(monkeypatch, iso_test_settings):
     monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_ID", raising=False)
     monkeypatch.delenv("NEMOWLAW_WHOOP_CLIENT_SECRET", raising=False)
@@ -43,7 +108,7 @@ def test_whoop_oauth_authorize_then_callback(monkeypatch, iso_test_settings):
     monkeypatch.setattr(
         wo,
         "token_exchange_authorization_code",
-        lambda _settings, **_k: {  # noqa: ARG005
+        lambda _settings, *, code, redirect_uri, **_k: {  # noqa: ARG005
             "access_token": "a1",
             "refresh_token": "r1",
             "expires_in": 3600,
