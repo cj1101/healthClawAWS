@@ -14,7 +14,7 @@ def test_chat_only_popeye_presents_user(iso_test_settings):
     out = orch.run_chat_turn("I ate chicken and logged a moderate workout.")
 
     assert "reply" in out
-    assert "Stan (nutrition focus)" in out["reply"]
+    assert "Stan" in out["reply"]
 
     db = get_db(s)
     with db.transaction() as cur:

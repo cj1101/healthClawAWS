@@ -55,7 +55,7 @@ from nemoclaw_health.events import (
 )
 from nemoclaw_health.orchestrator import HealthOrchestrator
 from nemoclaw_health.export_backup import export_raw_events_jsonl
-from nemoclaw_health.health_coach_store import configure_health_coach_db, health_store_bootstrap
+from nemoclaw_health.health_coach_store import bootstrap_stan_snapshots, configure_health_coach_db, health_store_bootstrap
 from nemoclaw_health.retention import run_delegation_metadata_prune, run_raw_event_prune
 from nemoclaw_health.settings import Settings
 from nemoclaw_health.storage_catalog import build_storage_catalog
@@ -210,6 +210,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         DataEntryService(settings).ensure_optional_seed_domains()
         settings.resolved_artifact_log().parent.mkdir(parents=True, exist_ok=True)
         settings.resolved_apple_imports_dir().mkdir(parents=True, exist_ok=True)
+        try:
+            bootstrap_stan_snapshots(settings.resolved_sqlite())
+        except Exception:
+            pass
         yield
 
     app = FastAPI(
@@ -401,7 +405,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def ingest(req: IngestReq = Body(...), s: Settings = Depends(svc_settings)):
         svc = DataEntryService(s)
         try:
-            return svc.ingest(
+            result = svc.ingest(
                 domain=req.domain,
                 payload=req.payload,
                 source=req.source,
@@ -409,6 +413,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        _food_domains = {"food", "meal", "nutrition", "diet"}
+        if req.domain.strip().lower() in _food_domains:
+            try:
+                HealthOrchestrator(s).run_stan_snapshot("food_ingest")
+            except Exception:
+                pass
+        return result
 
     @app.post("/v1/data/clarifications/{pending_row_id}/commit")
     def clarification_commit(
@@ -463,7 +474,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Cron-friendly alias for POST /v1/connectors/whoop/sync."""
         db = get_db(s)
         try:
-            return sync_whoop(db, s, days=days)
+            result = sync_whoop(db, s, days=days)
         except WhoopConfigError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         except WhoopOAuthError as e:
@@ -472,6 +483,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=502, detail=str(e)) from e
         except Exception as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        try:
+            HealthOrchestrator(s).run_stan_snapshot("whoop_sync")
+        except Exception:
+            pass
+        return result
 
     @app.post("/v1/storage/export-raw-jsonl")
     def export_raw_jsonl(req: ExportRawReq = Body(...), s: Settings = Depends(svc_settings)):
@@ -679,7 +695,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         db = get_db(s)
         try:
-            return sync_whoop(db, s, days=days)
+            result = sync_whoop(db, s, days=days)
         except WhoopConfigError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         except WhoopOAuthError as e:
@@ -688,6 +704,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=502, detail=str(e)) from e
         except Exception as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        try:
+            HealthOrchestrator(s).run_stan_snapshot("whoop_sync")
+        except Exception:
+            pass
+        return result
 
     @app.get("/v1/connectors/apple-health/status")
     def apple_status(s: Settings = Depends(svc_settings)):
@@ -714,6 +735,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 path.unlink(missing_ok=True)
             except OSError:
                 pass
+        try:
+            await asyncio.to_thread(HealthOrchestrator(s).run_stan_snapshot, "apple_health_import")
+        except Exception:
+            pass
         return result
 
     static_dash = Path(__file__).resolve().parent / "static" / "dashboard"

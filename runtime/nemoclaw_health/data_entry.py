@@ -10,6 +10,7 @@ from nemoclaw_health.health_coach_store import (
     health_db_biometrics_window,
     health_db_meals_window,
     health_store_bootstrap,
+    load_latest_stan_snapshot,
     mirror_ingest_payload_to_biometric,
     sqlite_tables_with_counts,
     upsert_biometric_sample,
@@ -938,6 +939,12 @@ class DataEntryService:
         whoop_like = sum(by_source.get(s, 0) for s in ("whoop", "wearable_auto"))
         apple_like = int(by_source.get("healthkit_export", 0))
 
+        stan_snapshot: dict[str, Any] | None = None
+        try:
+            stan_snapshot = load_latest_stan_snapshot(self.settings.resolved_sqlite())
+        except Exception:
+            stan_snapshot = None
+
         return {
             "managed_by_agent": "data-entry",
             "window": {
@@ -960,6 +967,7 @@ class DataEntryService:
                 "meals": meals_ctx,
                 "biometrics": bio_ctx,
             },
+            "stan_latest_snapshot": stan_snapshot,
         }
 
     def meals_window_payload(self, *, days: int | None = None, limit: int | None = None) -> dict[str, Any]:

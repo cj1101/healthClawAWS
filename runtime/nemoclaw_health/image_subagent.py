@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+from nemoclaw_health.chat_context import format_recent_conversation_block
 from nemoclaw_health.openrouter_client import chat_completion
 from nemoclaw_health.settings import Settings
 
@@ -30,13 +31,9 @@ def describe_images_for_coaching(
         return ""
 
     blocks: list[str] = []
-    if conversation_context:
-        blocks.append("Recent conversation (oldest first, may be truncated):\n")
-        for m in conversation_context:
-            role = m.get("role", "")
-            content = (m.get("content") or "").strip()
-            if content:
-                blocks.append(f"{role}: {content}\n")
+    conv = format_recent_conversation_block(conversation_context)
+    if conv:
+        blocks.append(conv)
 
     ut = user_text.strip()
     if ut:

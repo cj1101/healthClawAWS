@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from nemoclaw_health.artifacts import append_jsonl
+from nemoclaw_health.chat_context import format_recent_conversation_block
 from nemoclaw_health.contracts_runtime import contracts_prompt_blob
 from nemoclaw_health.data_entry import DataEntryService
 from nemoclaw_health.db import (
@@ -16,6 +17,7 @@ from nemoclaw_health.db import (
     new_id,
 )
 from nemoclaw_health.events import UserVisibilityInvariantError, validate_orchestration_event
+from nemoclaw_health.health_coach_store import bootstrap_stan_snapshots, save_stan_snapshot
 from nemoclaw_health.image_subagent import describe_images_for_coaching
 from nemoclaw_health.openrouter_client import chat_completion, parse_llm_json_object
 from nemoclaw_health.settings import Settings
@@ -252,8 +254,35 @@ def run_worker_stub(worker: str, user_text: str, meta: dict[str, Any]) -> dict[s
         }
     if worker == "stan":
         return {
-            "macros_delta_hint": "Track protein distribution across waking hours versus your goal curve.",
-            "summary": "Nutrition angle: stabilize meal spacing and quantify yesterday's intake variance.",
+            "data_quality_flags": [],
+            "macro_trends": {
+                "summary": "Insufficient data for macro trend analysis. Log more meals to enable tracking.",
+                "vs_goals": "Unable to assess — no goal baseline available.",
+                "notable_patterns": [],
+            },
+            "recovery_correlations": {
+                "summary": "Cross-reference analysis pending — ensure WHOOP or Apple Health data is synced.",
+                "findings": [],
+            },
+            "sleep_correlations": {
+                "summary": "Sleep correlation analysis pending — sync wearable data to enable.",
+                "findings": [],
+            },
+            "workout_correlations": {
+                "summary": "Workout correlation analysis pending — sync strain data to enable.",
+                "findings": [],
+            },
+            "timing_patterns": {
+                "summary": "Log meals consistently to surface timing patterns and fasting windows.",
+                "fasting_windows": [],
+                "gaps": [],
+            },
+            "anomalies": [],
+            "goal_progress": {
+                "summary": "Goal progress tracking requires consistent food logging and a defined goal.",
+                "on_track": None,
+                "metrics": [],
+            },
         }
     if worker == "dick":
         return {
@@ -289,8 +318,8 @@ def synthesize_stub_reply(user_message: str, workers: list[str], joy_tier: str) 
 
     if "stan" in workers:
         blocks.append(
-            "**Stan (nutrition focus):** stabilize meal rhythm and quantify protein vs your target band "
-            "for the window you mentioned.",
+            "**Stan (nutrition + biometric cross-reference):** log meals and sync wearable data "
+            "to enable full recovery, sleep, and workout correlations against your nutrition patterns.",
         )
     if "dick" in workers:
         blocks.append(
@@ -317,9 +346,34 @@ def _normalize_joy_worker_payload(obj: dict[str, Any], meta: dict[str, Any]) -> 
 
 
 def _normalize_stan_worker_payload(obj: dict[str, Any]) -> dict[str, Any]:
+    def _str_field(key: str, default: str) -> str:
+        return str(obj.get(key) or default).strip() or default
+
+    def _list_field(key: str) -> list[Any]:
+        v = obj.get(key)
+        return v if isinstance(v, list) else []
+
+    def _dict_field(key: str) -> dict[str, Any]:
+        v = obj.get(key)
+        return v if isinstance(v, dict) else {}
+
+    def _section(key: str, summary_default: str) -> dict[str, Any]:
+        raw = obj.get(key)
+        if isinstance(raw, dict):
+            if "summary" not in raw:
+                raw["summary"] = summary_default
+            return raw
+        return {"summary": summary_default, "findings": []}
+
     return {
-        "macros_delta_hint": str(obj.get("macros_delta_hint") or "Adjust timing vs targets."),
-        "summary": str(obj.get("summary") or "Nutrition notes captured."),
+        "data_quality_flags": _list_field("data_quality_flags"),
+        "macro_trends": _section("macro_trends", "Macro trend analysis unavailable."),
+        "recovery_correlations": _section("recovery_correlations", "Recovery correlation analysis unavailable."),
+        "sleep_correlations": _section("sleep_correlations", "Sleep correlation analysis unavailable."),
+        "workout_correlations": _section("workout_correlations", "Workout correlation analysis unavailable."),
+        "timing_patterns": _section("timing_patterns", "Timing pattern analysis unavailable."),
+        "anomalies": _list_field("anomalies"),
+        "goal_progress": _section("goal_progress", "Goal progress assessment unavailable."),
     }
 
 
@@ -357,19 +411,51 @@ def _llm_route(settings: Settings, user_message: str, kw_workers: list[str], kw_
     return parse_llm_json_object(raw)
 
 
+_STAN_SCHEMA = """{
+  "data_quality_flags": [{"field":"string","issue":"string","severity":"low|medium|high"}],
+  "macro_trends": {"summary":"string","vs_goals":"string","notable_patterns":[]},
+  "recovery_correlations": {"summary":"string","findings":[]},
+  "sleep_correlations": {"summary":"string","findings":[]},
+  "workout_correlations": {"summary":"string","findings":[]},
+  "timing_patterns": {"summary":"string","fasting_windows":[],"gaps":[]},
+  "anomalies": [{"date":"string","type":"string","detail":"string"}],
+  "goal_progress": {"summary":"string","on_track":true,"metrics":[]}
+}"""
+
+_STAN_SYSTEM_INSTRUCTIONS = (
+    "You are Stan, the cross-referencing nutrition and biometric analyst.\n"
+    "Your job:\n"
+    "1. QA-validate any freshly ingested food entries in the context: check for missing macros, "
+    "implausible calorie values, duplicate timestamps, or incomplete descriptions. "
+    "Populate data_quality_flags for each issue found (severity: low/medium/high).\n"
+    "2. Analyze food logs against all available biometric data (WHOOP recovery score, HRV, "
+    "sleep hours, sleep performance, strain, workout output, Apple Health biometrics) "
+    "to surface concrete correlations and patterns.\n"
+    "3. Track macro and calorie trends against the user's stated goals.\n"
+    "4. Identify meal timing patterns, fasting windows, and undereating gaps.\n"
+    "5. Flag anomalies: missing log days, intake spikes, inconsistent data.\n"
+    "6. Assess progress toward the user's health and body composition goals.\n"
+    "Use all data in the context window. If a section lacks data, say so concisely in summary. "
+    "Never speak to the user directly. Return ONLY valid JSON."
+)
+
+
 def _llm_worker(settings: Settings, worker: str, user_message: str, meta: dict[str, Any]) -> dict[str, Any]:
     blob = contracts_prompt_blob(worker)
     if worker == "joy":
         schema = '{"tier":"info|watch|urgent","summary":"string","signals":{}}'
+        extra_instructions = "Keep summaries concise and non-diagnostic."
     elif worker == "stan":
-        schema = '{"macros_delta_hint":"string","summary":"string"}'
+        schema = _STAN_SCHEMA
+        extra_instructions = _STAN_SYSTEM_INSTRUCTIONS
     else:
         schema = '{"session_struct_hint":["string"],"summary":"string"}'
+        extra_instructions = "Keep summaries concise and non-diagnostic."
     sys_msg = (
         f"{blob}\n"
         "Respond ONLY with JSON matching this schema (no prose outside JSON):\n"
         f"{schema}\n"
-        "Keep summaries concise and non-diagnostic."
+        f"{extra_instructions}"
     )
     user_ctx = json.dumps({"user_message": user_message, "meta": meta}, ensure_ascii=False)
 
@@ -414,11 +500,33 @@ def _llm_synthesize(
     insight_context: dict[str, Any] | None,
 ) -> str:
     blob = contracts_prompt_blob("popeye")
+
+    # Extract Stan's latest snapshot from insight_context for non-nutrition turns
+    stan_snapshot = None
+    if isinstance(insight_context, dict):
+        stan_snapshot = insight_context.get("stan_latest_snapshot")
+
     sys_msg = (
         f"{blob}\n"
         "You are Popeye, the sole voice to the user. Write cohesive markdown coaching guidance.\n"
-        "Merge specialist structured outputs; cite Stan/Dick/Joy perspectives briefly.\n"
+        "Merge specialist structured outputs; cite Stan/Dick/Joy perspectives where relevant.\n"
         "Stay non-diagnostic; never claim definitive medical diagnoses.\n"
+        "\n"
+        "## Stan output handling\n"
+        "Stan returns a multi-section JSON object. When Stan ran this turn (present in worker_payloads), "
+        "use all relevant sections to ground your response:\n"
+        "- ``data_quality_flags``: if severity is medium or high, gently flag the data issue to the user "
+        "so they can correct their log entry.\n"
+        "- ``macro_trends``: weave in trend insights and goal comparison where relevant.\n"
+        "- ``recovery_correlations`` / ``sleep_correlations`` / ``workout_correlations``: surface the most "
+        "actionable findings from whichever sections have non-empty findings lists.\n"
+        "- ``timing_patterns``: mention notable fasting windows or meal gaps if they are significant.\n"
+        "- ``anomalies``: flag anomalies the user should know about.\n"
+        "- ``goal_progress``: reference on_track status and key metrics when discussing goals.\n"
+        "When Stan did NOT run this turn but ``stan_latest_snapshot`` is present in context, "
+        "draw on it to provide continuity of nutrition and biometric insights. "
+        "Mention the snapshot is from a recent analysis, not the current message.\n"
+        "\n"
         "If Joy tier is watch or urgent, weave in the corresponding Joy disclaimer markers "
         "([[JOY_WATCH_V1]] / [[JOY_URGENT_V1]]) explicitly.\n"
         "If Joy ran at info tier, ensure [[JOY_INFO_V1]] appears when discussing wearable-derived signals.\n"
@@ -432,6 +540,7 @@ def _llm_synthesize(
         "worker_payloads": payloads,
         "data_entry_result": data_entry_result,
         "insight_context": insight_context,
+        "stan_latest_snapshot": stan_snapshot,
         "user_message": user_message,
     }
     raw = chat_completion(
@@ -511,6 +620,9 @@ class HealthOrchestrator:
             images=images,
             conversation_context=conversation_context,
         )
+        conv_block = format_recent_conversation_block(conversation_context)
+        if conv_block:
+            effective = f"{conv_block}\nCurrent turn:\n{effective}"
         if self.settings.openrouter_api_key:
             try:
                 return self._run_llm_turn(effective)
@@ -632,6 +744,44 @@ class HealthOrchestrator:
         reply = present["payload"]["reply_markdown"]
         return {"task_id": root_task, "reply": reply, "trace_chain": chain, "joy_tier": joy_tier_final}
 
+    def run_stan_snapshot(self, trigger_source: str) -> dict[str, Any]:
+        """Run Stan's full cross-referencing analysis and persist the result as a snapshot.
+
+        Called after data ingest events (food log, WHOOP sync, Apple Health import).
+        Writes to ``stan_snapshots`` table so Popeye always has Stan's latest analysis
+        in ``insight_context`` even on non-nutrition chat turns.
+        """
+        db_path = self.settings.resolved_sqlite()
+        try:
+            bootstrap_stan_snapshots(db_path)
+        except Exception:
+            pass
+
+        insight = fetch_data_entry_insight_context(self.settings, days=30)
+        if insight is None:
+            return {"ok": False, "reason": "no_insight_context"}
+
+        if not self.settings.openrouter_api_key:
+            return {"ok": False, "reason": "no_llm_key"}
+
+        try:
+            payload = _llm_worker(
+                self.settings,
+                "stan",
+                f"[stan_snapshot trigger={trigger_source}] Perform full cross-referencing analysis.",
+                {"full_insight_context": insight, "trigger_source": trigger_source},
+            )
+        except Exception as exc:
+            payload = run_worker_stub("stan", "", {})
+            payload["_snapshot_error"] = str(exc)
+
+        try:
+            save_stan_snapshot(db_path, trigger_source, payload)
+        except Exception:
+            pass
+
+        return {"ok": True, "trigger_source": trigger_source, "sections": list(payload.keys())}
+
     def _run_llm_turn(self, user_message: str) -> dict[str, Any]:
         root_task = new_id("task_")
         chain: list[str] = []
@@ -726,15 +876,42 @@ class HealthOrchestrator:
             append_jsonl(self.artifact_log, rtn_de)
             chain.append("data-entry -> popeye (structured return)")
 
+            # Stan QA pass: validate the freshly ingested entry regardless of worker routing
+            if data_entry_result and data_entry_result.get("status") != "error":
+                _food_domains = {"food", "meal", "nutrition", "diet"}
+                if str(logging_spec.get("domain") or "").strip().lower() in _food_domains:
+                    qa_ctx = {
+                        "qa_mode": True,
+                        "ingested_entry": {
+                            "domain": logging_spec.get("domain"),
+                            "payload": logging_spec.get("payload"),
+                            "source": logging_spec.get("source"),
+                        },
+                        "data_entry_result": data_entry_result,
+                    }
+                    if insight_raw_llm is not None:
+                        qa_ctx["full_insight_context"] = insight_raw_llm
+                    try:
+                        stan_qa_raw = _llm_worker(self.settings, "stan", user_message, qa_ctx)
+                        stan_qa_flags = stan_qa_raw.get("data_quality_flags", [])
+                    except Exception:
+                        stan_qa_flags = []
+                    data_entry_result["stan_qa_flags"] = stan_qa_flags
+                    chain.append("popeye -> stan (qa_validate_food_entry)")
+                    chain.append("stan -> popeye (data_quality_flags return)")
+
         worker_payloads: dict[str, Any] = {}
         joy_tier_final = "info"
         joy_templates_applied: list[str] = []
 
         for w in workers:
-            wl_payload = {
+            wl_payload: dict[str, Any] = {
                 "user_message": user_message,
                 "meta": routing_meta_llm,
             }
+            # Stan receives the full (unbounded) insight context for cross-referencing
+            if w == "stan" and insight_raw_llm is not None:
+                wl_payload["full_insight_context"] = insight_raw_llm
             delegation = _delegate_event(root_task, w, f"delegate_to_{w}", wl_payload)
             delegation["workflow_id"] = f"wf_{root_task}_{w}"
 
@@ -745,7 +922,10 @@ class HealthOrchestrator:
             chain.append(f"popeye -> {w} (delegate)")
 
             try:
-                stub = _llm_worker(self.settings, w, user_message, routing_meta_llm)
+                worker_meta = routing_meta_llm
+                if w == "stan" and insight_raw_llm is not None:
+                    worker_meta = {**routing_meta_llm, "full_insight_context": insight_raw_llm}
+                stub = _llm_worker(self.settings, w, user_message, worker_meta)
             except Exception:
                 stub = run_worker_stub(w, user_message, routing_meta_llm)
 

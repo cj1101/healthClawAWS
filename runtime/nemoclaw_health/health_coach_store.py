@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import sys
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+_STAN_SNAPSHOT_RETAIN = 20
 
 _HEALTH_COACH_ROOT = Path(__file__).resolve().parent.parent.parent / "vendor/openclaw-health/skills/health-coach"
 
@@ -249,3 +254,98 @@ def health_db_biometrics_window(*, days: int) -> dict[str, Any]:
         "by_source": by_source,
         "rows": slim,
     }
+
+
+# ---------------------------------------------------------------------------
+# Stan insight snapshots — persisted in the main nemoclaw SQLite database
+# ---------------------------------------------------------------------------
+
+
+def _open_nemoclaw_db_rw(db_path: Path) -> sqlite3.Connection:
+    q = urllib.parse.quote(str(db_path.resolve()))
+    return sqlite3.connect(f"file:{q}", uri=True)
+
+
+def bootstrap_stan_snapshots(db_path: Path) -> None:
+    """Create the stan_snapshots table if it does not exist."""
+    conn = _open_nemoclaw_db_rw(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stan_snapshots (
+                id           TEXT PRIMARY KEY,
+                created_at   TEXT NOT NULL,
+                trigger_source TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_stan_snapshot(
+    db_path: Path,
+    trigger_source: str,
+    payload: dict[str, Any],
+    *,
+    retain: int = _STAN_SNAPSHOT_RETAIN,
+) -> None:
+    """Persist a Stan analysis snapshot and prune old rows beyond *retain* count."""
+    import uuid
+
+    snapshot_id = f"snap_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    payload_json = json.dumps(payload, ensure_ascii=False)
+
+    conn = _open_nemoclaw_db_rw(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO stan_snapshots (id, created_at, trigger_source, payload_json) VALUES (?, ?, ?, ?)",
+            (snapshot_id, now, trigger_source, payload_json),
+        )
+        # Prune: keep only the most recent `retain` rows
+        conn.execute(
+            """
+            DELETE FROM stan_snapshots
+            WHERE id NOT IN (
+                SELECT id FROM stan_snapshots
+                ORDER BY created_at DESC
+                LIMIT ?
+            )
+            """,
+            (retain,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_latest_stan_snapshot(db_path: Path) -> dict[str, Any] | None:
+    """Return the most recent Stan snapshot payload, or None if none exists."""
+    if not db_path.is_file():
+        return None
+
+    q = urllib.parse.quote(str(db_path.resolve()))
+    conn = sqlite3.connect(f"file:{q}?mode=ro", uri=True)
+    try:
+        row = conn.execute(
+            "SELECT payload_json, created_at, trigger_source FROM stan_snapshots ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Table may not exist yet on first boot
+        return None
+    finally:
+        conn.close()
+
+    if row is None:
+        return None
+
+    try:
+        payload = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    payload["_snapshot_meta"] = {"created_at": row[1], "trigger_source": row[2]}
+    return payload

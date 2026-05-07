@@ -214,7 +214,9 @@ Environment variables:
 - `NEMOWLAW_CHAT_BEARER_TOKEN`: must match the API's value when `NEMOWLAW_DASHBOARD_PASSWORD` is enabled.
 - `TELEGRAM_CHAT_HTTP_TIMEOUT_S`: optional timeout for long chat turns; default is 900 seconds.
 
-The bot registers `/start`, `/help`, `/new`, and `/summary` on startup. Plain text messages are forwarded to `POST /v1/chat`.
+The bot registers `/start`, `/help`, `/new`, and `/summary` on startup (`setMyCommands`). Plain text messages are forwarded to `POST /v1/chat`.
+
+If slash commands misbehave in your Telegram client, use the **reply keyboard** after `/start`, or send a **whole-line** alias (case-insensitive): `hc:new`, `hc:summary`, `hc:help`; `nemoclaw new`, `nemoclaw summary`, `nemoclaw help`; `reset`; `snapshot`; `help`. These mirror `/new`, `/summary`, and `/help` without relying on `/`.
 
 ## Data, Privacy, And Backups
 

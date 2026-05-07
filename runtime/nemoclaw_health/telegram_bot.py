@@ -15,15 +15,17 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import logging
 import os
+import re
 import sys
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
 import httpx
-from telegram import BotCommand, Update
+from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -35,6 +37,52 @@ _CHUNK = 3800
 # One chat turn can run route + (optional repair) × workers + synthesis — several minutes worst case.
 _DEFAULT_CHAT_HTTP_TIMEOUT_S = 900.0
 _TYPING_REFRESH_S = 4.5
+
+# Reply-keyboard labels (must match alias routing in ``_route_text_command``).
+_LABEL_NEW = "Fresh topic"
+_LABEL_SUMMARY = "Holistic summary"
+_LABEL_HELP = "Help"
+
+
+def _reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[_LABEL_NEW], [_LABEL_SUMMARY], [_LABEL_HELP]],
+        resize_keyboard=True,
+    )
+
+
+def _normalize_alias_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip()).lower()
+
+
+def _route_text_command(normalized: str) -> str | None:
+    """Map a single-line user message to ``new``, ``summary``, or ``help``; else ``None``.
+
+    Uses exact-line aliases so coaching messages are never substring-matched.
+    """
+    if normalized in (
+        "hc:new",
+        "nemoclaw new",
+        "reset",
+        _normalize_alias_line(_LABEL_NEW),
+    ):
+        return "new"
+    if normalized in (
+        "hc:summary",
+        "nemoclaw summary",
+        "snapshot",
+        _normalize_alias_line(_LABEL_SUMMARY),
+    ):
+        return "summary"
+    if normalized in (
+        "hc:help",
+        "nemoclaw help",
+        "help",
+        _normalize_alias_line(_LABEL_HELP),
+    ):
+        return "help"
+    return None
+
 
 _SUMMARY_PROMPT = (
     "[Telegram command /summary] As Popeye, give a cohesive holistic health coaching snapshot. "
@@ -134,6 +182,16 @@ def _chunks(text: str) -> list[str]:
     if not text:
         return ["(empty reply)"]
     return [text[i : i + _CHUNK] for i in range(0, len(text), _CHUNK)]
+
+
+async def _get_chat_turn_lock(bot_data: dict[str, Any], chat_id: int) -> asyncio.Lock:
+    """Per-chat asyncio lock: serializes deque updates vs /clear vs /new late assistant append."""
+    reg: asyncio.Lock = bot_data["_chat_lock_registry"]
+    async with reg:
+        locks: dict[int, asyncio.Lock] = bot_data["chat_turn_locks"]
+        if chat_id not in locks:
+            locks[chat_id] = asyncio.Lock()
+        return locks[chat_id]
 
 
 async def _call_chat(
@@ -245,9 +303,19 @@ async def _deliver_chat_response(
     snapshot = reply[:8000] if isinstance(reply, str) else str(data)[:8000]
     history[chat_id].append({"role": "assistant", "content": snapshot})
 
-    for raw_part in _chunks(reply):
-        safe = raw_part.replace("\x00", "")
-        await update.message.reply_text(safe)
+    try:
+        for raw_part in _chunks(reply):
+            safe = raw_part.replace("\x00", "")
+            await update.message.reply_text(safe)
+    except Exception as e:
+        logger.exception("Telegram reply send failed after successful /v1/chat response")
+        try:
+            await update.message.reply_text(
+                "The coach reply was generated but sending it through Telegram failed. "
+                f"Error: {str(e)[:500]}"
+            )
+        except Exception:
+            logger.exception("Could not notify user after Telegram reply failure")
 
 
 def _reject_if_unauthorized(update: Update, allowed: frozenset[int]) -> bool:
@@ -260,7 +328,17 @@ def _reject_if_unauthorized(update: Update, allowed: frozenset[int]) -> bool:
     return u.id not in allowed
 
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _reply_unauthorized(update: Update, allowed: frozenset[int]) -> None:
+    if not update.message:
+        return
+    if not allowed:
+        await update.message.reply_text("Bot misconfigured: TELEGRAM_ALLOWED_USER_IDS is empty.")
+    else:
+        await update.message.reply_text("Unauthorized.")
+
+
+async def send_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Intro text and reply keyboard. Intentionally **not** gated on allowlist so new users can read their user id."""
     if not update.effective_user or not update.message:
         return
     uid = update.effective_user.id
@@ -268,60 +346,76 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Nemoclaw chat bridge (Popeye via /v1/chat).\n\n"
         f"Your Telegram user id: {uid}\n"
         "Add it to TELEGRAM_ALLOWED_USER_IDS on the server to allow this account.\n\n"
-        "Commands:\n"
-        "/new — clear this bot’s short-term chat memory and start a fresh topic.\n"
-        "/summary — ask Popeye for a holistic health coaching snapshot.\n"
-        "/help — repeat this overview.\n\n"
+        "Slash commands: /new, /summary, /help\n\n"
+        "If “/” commands fail in your client, use the buttons below or type one line:\n"
+        f"• {_LABEL_NEW} — clear this bot’s short-term chat memory.\n"
+        f"• {_LABEL_SUMMARY} — holistic coaching snapshot (same as /summary).\n"
+        f"• {_LABEL_HELP} — this overview.\n"
+        "Aliases (whole message, case-insensitive): hc:new, hc:summary, hc:help; "
+        "nemoclaw new|summary|help; reset; snapshot; help.\n\n"
         "Send plain text or photos (with optional caption). Photos use a vision model on the server; "
         "recent turns in this chat are sent as context when you attach an image.",
+        reply_markup=_reply_keyboard(),
     )
 
 
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await cmd_start(update, context)
-
-
-async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
         return
     allowed: frozenset[int] = context.bot_data["allowed"]
     if _reject_if_unauthorized(update, allowed):
-        if not allowed:
-            await update.message.reply_text("Bot misconfigured: TELEGRAM_ALLOWED_USER_IDS is empty.")
-        else:
-            await update.message.reply_text("Unauthorized.")
+        await _reply_unauthorized(update, allowed)
         return
 
     chat_id = update.effective_chat.id
-    context.bot_data["history"][chat_id].clear()
+    lock = await _get_chat_turn_lock(context.bot_data, chat_id)
+    async with lock:
+        dq = context.bot_data["history"][chat_id]
+        dq.clear()
     await update.message.reply_text(
         "Fresh topic — bot-side chat memory for this thread was cleared. "
         "Reply with text or a photo (caption optional). Long answers can take several minutes "
         "when the backend chains multiple model calls—you’ll see “typing…” while it works.",
+        reply_markup=_reply_keyboard(),
     )
 
 
-async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def run_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message:
         return
     allowed: frozenset[int] = context.bot_data["allowed"]
     if _reject_if_unauthorized(update, allowed):
-        if not allowed:
-            await update.message.reply_text("Bot misconfigured: TELEGRAM_ALLOWED_USER_IDS is empty.")
-        else:
-            await update.message.reply_text("Unauthorized.")
+        await _reply_unauthorized(update, allowed)
         return
 
     chat_id = update.effective_chat.id
     hist = context.bot_data["history"]
-    prior = [dict(x) for x in hist[chat_id]]
-    hist[chat_id].append({"role": "user", "content": "[Telegram /summary]"})
-    await _deliver_chat_response(
-        update,
-        context,
-        _SUMMARY_PROMPT,
-        conversation_context=prior if prior else None,
-    )
+    lock = await _get_chat_turn_lock(context.bot_data, chat_id)
+    async with lock:
+        prior = [dict(x) for x in hist[chat_id]]
+        hist[chat_id].append({"role": "user", "content": "[Telegram /summary]"})
+        await _deliver_chat_response(
+            update,
+            context,
+            _SUMMARY_PROMPT,
+            conversation_context=prior if prior else None,
+        )
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_welcome(update, context)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_welcome(update, context)
+
+
+async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_new(update, context)
+
+
+async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await run_summary(update, context)
 
 
 def _mime_from_tg_path(file_path: str | None) -> str:
@@ -349,9 +443,6 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     hist = context.bot_data["history"]
     caption = (update.message.caption or "").strip()
-    prior = [dict(x) for x in hist[chat_id]]
-    label = caption if caption else "[photo]"
-    hist[chat_id].append({"role": "user", "content": label})
 
     photo = update.message.photo[-1]
     try:
@@ -361,20 +452,25 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         raw = buf.getvalue()
     except Exception:
         logger.exception("telegram download photo")
-        _pop_pending_user(hist, chat_id)
         await update.message.reply_text("Could not download the photo; try again.")
         return
 
     mt = _mime_from_tg_path(tg_file.file_path)
     b64 = base64.standard_b64encode(raw).decode("ascii")
     images = [{"mime_type": mt, "data_base64": b64}]
-    await _deliver_chat_response(
-        update,
-        context,
-        caption,
-        images=images,
-        conversation_context=prior if prior else None,
-    )
+
+    lock = await _get_chat_turn_lock(context.bot_data, chat_id)
+    async with lock:
+        prior = [dict(x) for x in hist[chat_id]]
+        label = caption if caption else "[photo]"
+        hist[chat_id].append({"role": "user", "content": label})
+        await _deliver_chat_response(
+            update,
+            context,
+            caption,
+            images=images,
+            conversation_context=prior if prior else None,
+        )
 
 
 async def on_document_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -392,9 +488,6 @@ async def on_document_image(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat_id = update.effective_chat.id
     hist = context.bot_data["history"]
     caption = (update.message.caption or "").strip()
-    prior = [dict(x) for x in hist[chat_id]]
-    label = caption if caption else "[image file]"
-    hist[chat_id].append({"role": "user", "content": label})
 
     try:
         tg_file = await context.bot.get_file(doc.file_id)
@@ -403,13 +496,11 @@ async def on_document_image(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         raw = buf.getvalue()
     except Exception:
         logger.exception("telegram download document")
-        _pop_pending_user(hist, chat_id)
         await update.message.reply_text("Could not download the file; try again.")
         return
 
     mt = (doc.mime_type or _mime_from_tg_path(tg_file.file_path)).split(";")[0].strip().lower()
     if mt not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
-        _pop_pending_user(hist, chat_id)
         await update.message.reply_text(
             "Unsupported image type for the health API (use JPEG, PNG, GIF, or WebP)."
         )
@@ -417,18 +508,32 @@ async def on_document_image(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     b64 = base64.standard_b64encode(raw).decode("ascii")
     images = [{"mime_type": mt, "data_base64": b64}]
-    await _deliver_chat_response(
-        update,
-        context,
-        caption,
-        images=images,
-        conversation_context=prior if prior else None,
-    )
+
+    lock = await _get_chat_turn_lock(context.bot_data, chat_id)
+    async with lock:
+        prior = [dict(x) for x in hist[chat_id]]
+        label = caption if caption else "[image file]"
+        hist[chat_id].append({"role": "user", "content": label})
+        await _deliver_chat_response(
+            update,
+            context,
+            caption,
+            images=images,
+            conversation_context=prior if prior else None,
+        )
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.effective_user or not update.message or not update.message.text:
         return
+
+    text = update.message.text.strip()
+    routed = _route_text_command(_normalize_alias_line(text))
+    # Same as /help: always available so anyone can see their numeric user id from aliases too.
+    if routed == "help":
+        await send_welcome(update, context)
+        return
+
     allowed: frozenset[int] = context.bot_data["allowed"]
     if _reject_if_unauthorized(update, allowed):
         if not allowed:
@@ -442,21 +547,31 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text("Unauthorized.")
         return
 
+    if routed == "new":
+        await run_new(update, context)
+        return
+    if routed == "summary":
+        await run_summary(update, context)
+        return
+
     chat_id = update.effective_chat.id
     hist = context.bot_data["history"]
-    text = update.message.text.strip()
-    prior = [dict(x) for x in hist[chat_id]]
-    hist[chat_id].append({"role": "user", "content": text})
-    await _deliver_chat_response(
-        update,
-        context,
-        text,
-        conversation_context=prior if prior else None,
-    )
+    lock = await _get_chat_turn_lock(context.bot_data, chat_id)
+    async with lock:
+        prior = [dict(x) for x in hist[chat_id]]
+        hist[chat_id].append({"role": "user", "content": text})
+        await _deliver_chat_response(
+            update,
+            context,
+            text,
+            conversation_context=prior if prior else None,
+        )
 
 
 async def post_init(application: Application) -> None:
     """Override stale BotFather menus so “/” only lists commands this process implements."""
+    application.bot_data.setdefault("_chat_lock_registry", asyncio.Lock())
+    application.bot_data.setdefault("chat_turn_locks", {})
     await application.bot.set_my_commands(
         [
             BotCommand("start", "Intro, your user id, and command list"),
@@ -504,6 +619,8 @@ def main() -> None:
     app.bot_data["bearer"] = bearer
     app.bot_data["chat_timeout_s"] = chat_timeout_s
     app.bot_data["history"] = defaultdict(lambda: deque(maxlen=_history_maxlen()))
+    app.bot_data["_chat_lock_registry"] = asyncio.Lock()
+    app.bot_data["chat_turn_locks"] = {}
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))

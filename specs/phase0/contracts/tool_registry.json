@@ -18,6 +18,54 @@
       "audit": { "log_payload_redaction": "phi_redacted" }
     },
     {
+      "tool_id": "health.validate_food_entry",
+      "summary": "QA-validate a freshly ingested food log entry for completeness and plausibility; returns data_quality_flags.",
+      "owner_agent": "stan",
+      "visibility": ["popeye", "stan", "data-entry", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.analyze_recovery_correlations",
+      "summary": "Cross-reference food logs with WHOOP recovery score and HRV to surface nutrition-recovery patterns.",
+      "owner_agent": "stan",
+      "visibility": ["popeye", "stan", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.analyze_sleep_correlations",
+      "summary": "Cross-reference food logs with sleep quality and duration metrics to surface nutrition-sleep patterns.",
+      "owner_agent": "stan",
+      "visibility": ["popeye", "stan", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.analyze_workout_correlations",
+      "summary": "Cross-reference food logs with WHOOP strain and workout output to surface pre/post nutrition patterns.",
+      "owner_agent": "stan",
+      "visibility": ["popeye", "stan", "dick", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.assess_goal_progress",
+      "summary": "Track macro and calorie trends against user stated goals; return on-track status and delta metrics.",
+      "owner_agent": "stan",
+      "visibility": ["popeye", "stan", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
+      "tool_id": "health.detect_anomalies",
+      "summary": "Detect anomalies in food and biometric data: missing log days, intake spikes, inconsistent entries.",
+      "owner_agent": "stan",
+      "visibility": ["popeye", "stan", "debug"],
+      "risk_tier": "low",
+      "audit": { "log_payload_redaction": "phi_redacted" }
+    },
+    {
       "tool_id": "health.build_training_plan",
       "summary": "Propose modality/intensity prescriptions from readiness context (Dick).",
       "owner_agent": "dick",
