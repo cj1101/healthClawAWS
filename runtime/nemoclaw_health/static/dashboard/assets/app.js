@@ -280,6 +280,7 @@ function extractMealsArray(j) {
   if (!j || typeof j !== "object") return [];
   const paths = [
     j.meals,
+    j.recent,
     j.meal_log,
     j.items,
     j.data?.meals,
@@ -305,6 +306,20 @@ function collectKeys(rows, max = 12) {
   return [...keys].slice(0, max);
 }
 
+function escapeHtmlFl(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function fmtMealNum(v) {
+  if (v == null || v === "") return "";
+  const n = Number(v);
+  return Number.isFinite(n) ? String(n) : String(v);
+}
+
 function renderMealTable(rows) {
   const wrap = $("flTableWrap");
   const thead = $("flThead");
@@ -322,30 +337,43 @@ function renderMealTable(rows) {
   }
   emptyEl?.classList.add("hidden");
   wrap.classList.remove("hidden");
-  const cols = collectKeys(objs);
-  thead.innerHTML = "";
-  const hr = document.createElement("tr");
-  for (const c of cols) {
-    const th = document.createElement("th");
-    th.textContent = c;
-    hr.appendChild(th);
-  }
-  thead.appendChild(hr);
+  thead.innerHTML =
+    "<tr><th>When</th><th>What</th><th>kcal</th><th>Details</th></tr>";
   tbody.innerHTML = "";
   for (const row of objs.slice(0, 50)) {
-    const tr = document.createElement("tr");
-    for (const c of cols) {
-      const td = document.createElement("td");
-      const v = row[c];
-      td.textContent =
-        v == null
-          ? ""
-          : typeof v === "object"
-            ? JSON.stringify(v)
-            : String(v);
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
+    const when =
+      row.meal_ts || row.recorded_at || row.meal_date || "";
+    const what = row.description ?? "";
+    const kcal = fmtMealNum(row.calories);
+    const src =
+      row._origin === "nemoclaw"
+        ? row.nemoclaw_source || "nemoclaw"
+        : row.input_type || row.source_ref || "health_db";
+    const confPct =
+      row.nemoclaw_confidence != null && row.nemoclaw_confidence !== ""
+        ? `${Math.round(Number(row.nemoclaw_confidence) * 100)}%`
+        : "";
+    const macroParts = [];
+    if (row.protein_g != null && row.protein_g !== "")
+      macroParts.push(`P ${fmtMealNum(row.protein_g)}g`);
+    if (row.carbs_g != null && row.carbs_g !== "")
+      macroParts.push(`C ${fmtMealNum(row.carbs_g)}g`);
+    if (row.fats_g != null && row.fats_g !== "")
+      macroParts.push(`F ${fmtMealNum(row.fats_g)}g`);
+    if (row.fiber_g != null && row.fiber_g !== "")
+      macroParts.push(`Fb ${fmtMealNum(row.fiber_g)}g`);
+    const pills = macroParts
+      .map((t) => `<span class="fl-pill">${escapeHtmlFl(t)}</span>`)
+      .join(" ");
+    const chips =
+      `<span class="fl-chip">${escapeHtmlFl(src)}</span>` +
+      (confPct
+        ? `<span class="fl-chip">${escapeHtmlFl(confPct)}</span>`
+        : "");
+    const detailInner = [pills, chips].filter(Boolean).join(" ");
+    const trMain = document.createElement("tr");
+    trMain.innerHTML = `<td>${escapeHtmlFl(String(when))}</td><td>${escapeHtmlFl(String(what))}</td><td>${escapeHtmlFl(kcal)}</td><td class="fl-detail">${detailInner}</td>`;
+    tbody.appendChild(trMain);
   }
 }
 

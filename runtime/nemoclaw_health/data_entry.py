@@ -37,6 +37,9 @@ FOOD_LOG_SEED_SCHEMA_HINT = (
     "calories",
 )
 
+# Dynamic ingest domains treated as food for merge UI + pending-row backfill.
+FOOD_DOMAIN_SLUGS = ("food_log", "food", "meal", "nutrition", "diet")
+
 
 def clamp_query_limit(limit: int | None, *, default: int = 50, max_lim: int = MAX_QUERY_LIMIT) -> int:
     if limit is None:
@@ -56,6 +59,118 @@ def clamp_insight_days(days: int | None) -> int:
     except (TypeError, ValueError):
         return 14
     return max(1, min(90, d))
+
+
+def _iso_to_dt(s: str | None) -> datetime | None:
+    if not s or not isinstance(s, str):
+        return None
+    t = s.strip()
+    if not t:
+        return None
+    try:
+        if t.endswith("Z"):
+            t = t[:-1] + "+00:00"
+        return datetime.fromisoformat(t)
+    except Exception:
+        return None
+
+
+def _meal_sort_key(m: dict[str, Any]) -> datetime:
+    for k in ("meal_ts", "recorded_at"):
+        dt = _iso_to_dt(str(m.get(k) or ""))
+        if dt:
+            return dt
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _collect_dyn_food_meals(de: Any, *, days: int, row_limit: int) -> list[dict[str, Any]]:
+    """Committed dynamic-domain rows for food slugs in the same calendar window as health.db meals."""
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=days - 1)
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+    start_iso = start_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    out: list[dict[str, Any]] = []
+    with de.db.transaction() as cur:
+        for slug in FOOD_DOMAIN_SLUGS:
+            if not _DYN_SLUG_OK.match(slug):
+                continue
+            if not cur.execute(
+                "SELECT 1 FROM tracking_registry WHERE slug = ?",
+                (slug,),
+            ).fetchone():
+                continue
+            de.db.ensure_dynamic_table(slug)
+            table = f"evt_dyn_{slug}"
+            rows = cur.execute(
+                f"""
+                SELECT id, recorded_at, payload_json, confidence, source, clarification_pending
+                FROM {table}
+                WHERE clarification_pending = 0 AND recorded_at >= ?
+                ORDER BY recorded_at DESC
+                LIMIT ?
+                """,
+                (start_iso, row_limit * 3),
+            ).fetchall()
+            for r in rows:
+                try:
+                    payload = json.loads(r["payload_json"] or "{}")
+                except json.JSONDecodeError:
+                    payload = {}
+                ra = str(r["recorded_at"] or "")
+                meal_ts = payload.get("meal_ts") or ra
+                meal_date = payload.get("meal_date")
+                if meal_date is None and meal_ts:
+                    dt = _iso_to_dt(str(meal_ts))
+                    if dt:
+                        meal_date = dt.date().isoformat()
+                out.append(
+                    {
+                        "id": r["id"],
+                        "meal_ts": meal_ts,
+                        "meal_date": meal_date,
+                        "description": payload.get("description"),
+                        "protein_g": payload.get("protein_g"),
+                        "carbs_g": payload.get("carbs_g"),
+                        "fats_g": payload.get("fats_g"),
+                        "fiber_g": payload.get("fiber_g"),
+                        "calories": payload.get("calories"),
+                        "input_type": "nemoclaw_chat",
+                        "source_ref": slug,
+                        "nemoclaw_source": r["source"],
+                        "nemoclaw_confidence": r["confidence"],
+                        "nemoclaw_domain": slug,
+                        "recorded_at": ra,
+                    },
+                )
+    return out
+
+
+def _merge_meal_lists(
+    hb_recent: list[dict[str, Any]],
+    dyn_meals: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def consider(item: dict[str, Any]) -> None:
+        desc = str(item.get("description") or "").strip().lower()[:200]
+        ts = str(item.get("meal_ts") or item.get("recorded_at") or "")
+        cid = str(item.get("id") or "")
+        key = (cid, ts[:19], desc)
+        if key in seen:
+            return
+        seen.add(key)
+        merged.append(item)
+
+    for r in hb_recent:
+        consider({**r, "_origin": "health_db"})
+    for r in dyn_meals:
+        consider({**r, "_origin": "nemoclaw"})
+    merged.sort(key=_meal_sort_key, reverse=True)
+    return merged[:limit]
 
 
 ALLOWED_INGEST_SOURCES = frozenset(
@@ -303,6 +418,7 @@ class DataEntryService:
         domain_slug: str,
         payload_patch: dict[str, Any],
         committed_raw_event_type: str = "data_entry_committed",
+        force: bool = False,
     ) -> dict[str, Any]:
         with self.db.transaction() as cur:
             slug = self._resolve_table_slug(cur, domain_slug)
@@ -331,7 +447,7 @@ class DataEntryService:
 
             src = normalize_ingest_source(str(dyn["source"]))
             conf, conf_reason = infer_confidence(
-                supplied=None,
+                supplied=1.0 if force else None,
                 payload=merged,
                 schema_hint=schema_hint or None,
                 source=src,
@@ -422,6 +538,47 @@ class DataEntryService:
             occurred_at=recorded_at,
         )
         return result
+
+    def commit_all_pending_food_rows(self) -> dict[str, Any]:
+        """Force-commit all clarification-pending rows in food-like domains (startup backfill)."""
+        self.ensure_optional_seed_domains()
+        committed_ids: list[str] = []
+        errors: list[dict[str, Any]] = []
+        for slug in FOOD_DOMAIN_SLUGS:
+            if not _DYN_SLUG_OK.match(slug):
+                continue
+            with self.db.transaction() as cur:
+                if not cur.execute(
+                    "SELECT 1 FROM tracking_registry WHERE slug = ?",
+                    (slug,),
+                ).fetchone():
+                    continue
+            self.db.ensure_dynamic_table(slug)
+            table = f"evt_dyn_{slug}"
+            with self.db.transaction() as cur:
+                rows = cur.execute(
+                    f"SELECT id FROM {table} WHERE clarification_pending = 1",
+                ).fetchall()
+            pending = [str(r["id"]) for r in rows]
+            for pid in pending:
+                try:
+                    r = self.commit_clarification(
+                        pending_row_id=pid,
+                        domain_slug=slug,
+                        payload_patch={},
+                        force=True,
+                    )
+                    if r.get("status") == "committed":
+                        committed_ids.append(pid)
+                    else:
+                        errors.append({"id": pid, "slug": slug, "result": r})
+                except Exception as e:
+                    errors.append({"id": pid, "slug": slug, "error": str(e)})
+        return {
+            "committed_count": len(committed_ids),
+            "committed_ids": committed_ids,
+            "errors": errors,
+        }
 
     def ingest(
         self,
@@ -973,4 +1130,9 @@ class DataEntryService:
     def meals_window_payload(self, *, days: int | None = None, limit: int | None = None) -> dict[str, Any]:
         d = clamp_insight_days(days)
         lim = clamp_query_limit(limit, default=50)
-        return {"managed_by_agent": "data-entry", "days": d, **health_db_meals_window(days=d, meals_row_limit=lim)}
+        self.ensure_optional_seed_domains()
+        hb = health_db_meals_window(days=d, meals_row_limit=lim)
+        dyn = _collect_dyn_food_meals(self, days=d, row_limit=lim)
+        hb_recent = hb.get("recent") if isinstance(hb.get("recent"), list) else []
+        meals = _merge_meal_lists(hb_recent, dyn, limit=lim)
+        return {"managed_by_agent": "data-entry", "days": d, **hb, "meals": meals}

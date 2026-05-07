@@ -219,3 +219,28 @@ table.catalog-table-nested td {
 main a {
   color: #58a6ff;
 }
+
+.fl-detail {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.fl-pill {
+  display: inline-block;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  margin: 0.1rem 0.25rem 0.1rem 0;
+  font-size: 0.75rem;
+  color: #c9d1d9;
+}
+.fl-chip {
+  display: inline-block;
+  background: #161b22;
+  border: 1px solid #388bfd66;
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  margin: 0.15rem 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: #58a6ff;
+}

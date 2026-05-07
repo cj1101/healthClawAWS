@@ -208,6 +208,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db = get_db(settings)
         db.init_schema()
         DataEntryService(settings).ensure_optional_seed_domains()
+        try:
+            DataEntryService(settings).commit_all_pending_food_rows()
+        except Exception:
+            pass
         settings.resolved_artifact_log().parent.mkdir(parents=True, exist_ok=True)
         settings.resolved_apple_imports_dir().mkdir(parents=True, exist_ok=True)
         try:

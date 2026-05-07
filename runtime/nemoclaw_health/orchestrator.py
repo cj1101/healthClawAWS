@@ -837,8 +837,18 @@ class HealthOrchestrator:
             dom = str(logging_spec.get("domain") or "").strip()
             pay = logging_spec.get("payload") if isinstance(logging_spec.get("payload"), dict) else {}
             src = str(logging_spec.get("source") or "manual").strip().lower()
+            _food_domains = {"food", "meal", "nutrition", "diet", "food_log"}
+            client_conf: float | None = None
+            if dom.lower() in _food_domains:
+                dom = "food_log"
+                client_conf = 1.0
             try:
-                data_entry_result = svc.ingest(domain=dom, payload=pay, source=src)
+                data_entry_result = svc.ingest(
+                    domain=dom,
+                    payload=pay,
+                    source=src,
+                    client_confidence=client_conf,
+                )
             except ValueError as e:
                 data_entry_result = {"status": "error", "detail": str(e)}
 
@@ -878,7 +888,7 @@ class HealthOrchestrator:
 
             # Stan QA pass: validate the freshly ingested entry regardless of worker routing
             if data_entry_result and data_entry_result.get("status") != "error":
-                _food_domains = {"food", "meal", "nutrition", "diet"}
+                _food_domains = {"food", "meal", "nutrition", "diet", "food_log"}
                 if str(logging_spec.get("domain") or "").strip().lower() in _food_domains:
                     qa_ctx = {
                         "qa_mode": True,
