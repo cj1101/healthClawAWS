@@ -1,4 +1,4 @@
-"""Vision pass for chat images: single OpenRouter call with the configured VLM (default Qwen 3.6)."""
+"""Image pass for chat attachments using the pinned OpenRouter model."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def describe_images_for_coaching(
     images: list[tuple[str, bytes]],
     conversation_context: list[dict[str, str]] | None,
 ) -> str:
-    """Multimodal completion using ``settings.openrouter_vision_model``."""
+    """Multimodal completion using the globally pinned OpenRouter model."""
     if not images:
         return ""
 
@@ -62,5 +62,4 @@ def describe_images_for_coaching(
         messages,
         temperature=0.2,
         timeout_s=180.0,
-        model=settings.openrouter_vision_model,
     ).strip()

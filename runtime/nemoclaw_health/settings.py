@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 WHOOP_OAUTH_AUTH_DEFAULT = "https://api.prod.whoop.com/oauth/oauth2/auth"
 WHOOP_OAUTH_TOKEN_DEFAULT = "https://api.prod.whoop.com/oauth/oauth2/token"
 WHOOP_API_BASE_DEFAULT = "https://api.prod.whoop.com/developer"
+OPENROUTER_MODEL_ID = "deepseek/deepseek-v4-flash"
 
 # Uvicorn WorkingDirectory is often ``runtime/``; canonical deploy ``.env`` lives at repo root.
 _SETTINGS_DIR = Path(__file__).resolve().parent
@@ -36,9 +37,9 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str | None = None
     openrouter_api_base: str = "https://openrouter.ai/api/v1"
-    openrouter_model: str = "deepseek/deepseek-v4-pro"
-    # Used only when /v1/chat includes images (vision pass before Popeye).
-    openrouter_vision_model: str = "qwen/qwen3.6-35b-a3b"
+    openrouter_model: str = OPENROUTER_MODEL_ID
+    # All OpenRouter actions, including image pre-processing, are pinned to one model.
+    openrouter_vision_model: str = OPENROUTER_MODEL_ID
 
     # Prefer unprefixed WHOOP_* (matches common WHOOP docs); NEMOWLAW_* kept for backward compatibility.
     whoop_client_id: str | None = Field(

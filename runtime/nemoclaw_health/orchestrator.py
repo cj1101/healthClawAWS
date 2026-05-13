@@ -20,7 +20,7 @@ from nemoclaw_health.events import UserVisibilityInvariantError, validate_orches
 from nemoclaw_health.health_coach_store import bootstrap_stan_snapshots, save_stan_snapshot
 from nemoclaw_health.image_subagent import describe_images_for_coaching
 from nemoclaw_health.openrouter_client import chat_completion, parse_llm_json_object
-from nemoclaw_health.settings import Settings
+from nemoclaw_health.settings import OPENROUTER_MODEL_ID, Settings
 
 
 def load_joy_templates() -> list[dict[str, Any]]:
@@ -589,7 +589,7 @@ class HealthOrchestrator:
     ) -> str:
         if not images:
             return user_message
-        model_label = self.settings.openrouter_vision_model
+        model_label = OPENROUTER_MODEL_ID
         if self.settings.openrouter_api_key:
             try:
                 vision = describe_images_for_coaching(

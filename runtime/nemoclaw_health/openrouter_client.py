@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from nemoclaw_health.settings import Settings
+from nemoclaw_health.settings import OPENROUTER_MODEL_ID, Settings
 
 
 def chat_completion(
@@ -23,9 +23,8 @@ def chat_completion(
     if not key:
         raise RuntimeError("OpenRouter API key is not configured")
     url = f"{settings.openrouter_api_base.rstrip('/')}/chat/completions"
-    model_id = model if model is not None else settings.openrouter_model
     payload = {
-        "model": model_id,
+        "model": OPENROUTER_MODEL_ID,
         "messages": messages,
         "temperature": temperature,
     }

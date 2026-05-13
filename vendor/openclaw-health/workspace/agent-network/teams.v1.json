@@ -100,7 +100,7 @@
                        "enabled":  true,
                        "isPrimaryContact":  true,
                        "teamId":  "executive",
-                       "modelPreference":  "gemma31b",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "orchestration",
                                             "communication",
@@ -109,8 +109,7 @@
                                             "memory_stewardship"
                                         ],
                        "modelFallbacks":  [
-                                              "minimax25",
-                                              "gemma31b"
+                                              "deepseek/deepseek-v4-flash"
                                           ]
                    },
                    {
@@ -119,7 +118,7 @@
                        "title":  "Orchestration Lead",
                        "enabled":  true,
                        "teamId":  "coding",
-                       "modelPreference":  "gemma31b",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "engineering_routing",
                                             "task_breakdown",
@@ -132,14 +131,14 @@
                        "title":  "Core Software Architect",
                        "enabled":  true,
                        "teamId":  "coding",
-                       "modelPreference":  "minimax27",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "architecture",
                                             "system_design",
                                             "technical_strategy"
                                         ],
                        "modelFallbacks":  [
-                                              "minimax27"
+                                              "deepseek/deepseek-v4-flash"
                                           ]
                    },
                    {
@@ -148,7 +147,7 @@
                        "title":  "Diagnostic Specialist",
                        "enabled":  true,
                        "teamId":  "coding",
-                       "modelPreference":  "kimi25",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "diagnostics",
                                             "incident_triage",
@@ -161,7 +160,7 @@
                        "title":  "Data Pipeline & Structuring Engineer",
                        "enabled":  true,
                        "teamId":  "coding",
-                       "modelPreference":  "gemini_flash_lite",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "data_pipeline",
                                             "schema_design",
@@ -174,7 +173,7 @@
                        "title":  "Quality Assurance (QA) Lead",
                        "enabled":  true,
                        "teamId":  "coding",
-                       "modelPreference":  "qwen35_flash",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "test_strategy",
                                             "verification",
@@ -187,7 +186,7 @@
                        "title":  "Health Manager",
                        "enabled":  true,
                        "teamId":  "health",
-                       "modelPreference":  "gemma31b",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "health_orchestration",
                                             "human_activity_ingestion",
@@ -201,15 +200,14 @@
                        "title":  "Nutritionist",
                        "enabled":  true,
                        "teamId":  "health",
-                       "modelPreference":  "gemma31b",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "nutrition_analysis",
                                             "baseline_trend_monitoring",
                                             "threshold_alerting"
                                         ],
                        "modelFallbacks":  [
-                                              "minimax25",
-                                              "gemma31b"
+                                              "deepseek/deepseek-v4-flash"
                                           ]
                    },
                    {
@@ -218,15 +216,14 @@
                        "title":  "Trainer",
                        "enabled":  true,
                        "teamId":  "health",
-                       "modelPreference":  "gemma31b",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "training_plan_generation",
                                             "workout_programming",
                                             "activity_feedback"
                                         ],
                        "modelFallbacks":  [
-                                              "minimax25",
-                                              "gemma31b"
+                                              "deepseek/deepseek-v4-flash"
                                           ]
                    },
                    {
@@ -235,15 +232,14 @@
                        "title":  "Nurse",
                        "enabled":  true,
                        "teamId":  "health",
-                       "modelPreference":  "gemma31b",
+                       "modelPreference":  "deepseek/deepseek-v4-flash",
                        "capabilities":  [
                                             "vitals_monitoring",
                                             "risk_flagging",
                                             "clinical_followup_questions"
                                         ],
                        "modelFallbacks":  [
-                                              "minimax25",
-                                              "gemma31b"
+                                              "deepseek/deepseek-v4-flash"
                                           ]
                    }
                ]
